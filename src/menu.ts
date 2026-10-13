@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
-import { buildBox, composeScreen, enterFullscreen, leaveFullscreen } from "./engine.js";
+import { buildBox, composeScreen, deleteLastWord, enterFullscreen, isWordDeleteKey, leaveFullscreen } from "./engine.js";
 import { loadHistory, summarize } from "./history.js";
 
 export interface MenuConfig {
@@ -321,6 +321,12 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       if (editing) {
         if (data === "\x1b") {
           editing = false;
+          draw();
+          return;
+        }
+        // Ctrl+W / Ctrl+Backspace / Alt+Backspace delete a whole word.
+        if (isWordDeleteKey(data)) {
+          editBuf = deleteLastWord(editBuf);
           draw();
           return;
         }

@@ -161,6 +161,35 @@ export function buildBox(content: string[]): string[] {
   return out;
 }
 
+/**
+ * Delete the last word (plus any spaces before it), like Ctrl+Backspace.
+ * Exported for tests and reused by the menu's path field.
+ */
+export function deleteLastWord(s: string): string {
+  let end = s.length;
+  while (end > 0 && s[end - 1] === " ") end--;
+  while (end > 0 && s[end - 1] !== " ") end--;
+  return s.slice(0, end);
+}
+
+/**
+ * True for every key sequence that means "delete word": Ctrl+W (23),
+ * Ctrl+X-adjacent (24), and ESC DEL / ESC BS — which is what most
+ * terminals send for Ctrl+Backspace and Alt+Backspace. Uses char codes
+ * so no terminal-specific string matching is needed.
+ */
+export function isWordDeleteKey(data: string): boolean {
+  if (data.length === 1) {
+    const c0 = data.charCodeAt(0);
+    return c0 === 23 || c0 === 24;
+  }
+  if (data.length === 2 && data.charCodeAt(0) === 27) {
+    const c1 = data.charCodeAt(1);
+    return c1 === 127 || c1 === 8;
+  }
+  return false;
+}
+
 export interface CaretOpts {
   /** false → caret blinked off, show pending style instead of the block */
   caret: boolean;
@@ -372,7 +401,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       }
       if (end < textLines.length) lines.push(c(ansi.gray, `… +${textLines.length - end} more lines`));
       lines.push("");
-      lines.push(c(ansi.gray, "esc quit   ·   ctrl+w delete word   ·   backspace fix"));
+      lines.push(c(ansi.gray, "esc quit   ·   ctrl+w / ctrl+backspace delete word   ·   backspace fix"));
     } else {
       // results — framed panel
       const f = scoreRun(target, typed, finishElapsed);
@@ -457,22 +486,19 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           resolve("quit");
           return;
         }
-        if (data.startsWith("\x1b")) return;
-
-        // Ctrl+W / Ctrl+Backspace (0x17 or 0x08 with ctrl?) — delete word
-        if (data === "\x17" || data === "\x18") {
+        // Word delete: Ctrl+W, plus ESC DEL / ESC BS which is what most
+        // terminals send for Ctrl+Backspace and Alt+Backspace.
+        // Must come before the generic ESC-sequence ignore below.
+        if (isWordDeleteKey(data)) {
           if (typed.length > 0) {
-            // delete trailing spaces then word
-            let end = typed.length;
-            while (end > 0 && typed[end - 1] === " ") end--;
-            while (end > 0 && typed[end - 1] !== " ") end--;
-            // remove from end..typed.length, adjust keystroke counts approx (don't rewrite history)
-            typed = typed.slice(0, end);
+            typed = deleteLastWord(typed);
             lastKeyAt = Date.now();
             draw();
           }
           return;
         }
+        if (data.startsWith("\x1b")) return;
+
         // Backspace (DEL or BS)
         if (data === "\x7f" || data === "\x08") {
           if (typed.length > 0) {

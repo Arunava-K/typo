@@ -41,7 +41,7 @@ ${c(ansi.bold, "Other:")}
   --version          show version
 
 ${c(ansi.bold, "Keys while typing:")}
-  start typing to begin · esc quit · backspace fix · ctrl+w delete word
+  start typing to begin · esc quit · backspace fix · ctrl+w / ctrl+backspace delete word
 
 ${c(ansi.bold, "Keys on results:")}
   r retry · tab/n next · q/esc quit
