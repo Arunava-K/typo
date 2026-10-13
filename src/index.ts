@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 import { promises as fs } from "node:fs";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
-import { generateWords, generateQuote, normalizeCustom } from "./generator.js";
+import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
 import { loadHistory, summarize } from "./history.js";
 import { runMenu, type MenuConfig } from "./menu.js";
 import { runReplay } from "./replay.js";
 import { ansi, c } from "./ui.js";
 
 interface Mode {
-  kind: "time" | "words" | "quote" | "custom";
+  kind: "time" | "words" | "quote" | "custom" | "daily";
   timeSec: number;
   wordCount: number;
   customText: string | null;
@@ -29,6 +29,7 @@ ${c(ansi.bold, "Modes:")} ${c(ansi.gray, "(default: --time 30)")}
   --time <sec>       timed test (e.g. 15, 30, 60, 120)
   --words <n>        fixed word count test (e.g. 10, 25, 50, 100)
   --quote            random quote / sentence
+  --daily            shared daily text (same all day, everywhere)
   --custom <file>    practice with text from a file
   --text "..."       practice with inline custom text
 
@@ -56,6 +57,7 @@ ${c(ansi.bold, "Examples:")}
   typo --time 60 -p         ${c(ansi.gray, "# 60s with punctuation")}
   typo --words 50           ${c(ansi.gray, "# 50 words")}
   typo --quote              ${c(ansi.gray, "# random quote")}
+  typo --daily              ${c(ansi.gray, "# today's shared text")}
   typo --custom essay.txt   ${c(ansi.gray, "# custom text from file")}
   typo --replay             ${c(ansi.gray, "# watch your last run back")}
 `);
@@ -120,6 +122,9 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       modeSet = true;
     } else if (a === "--quote" || a === "-q") {
       mode.kind = "quote";
+      modeSet = true;
+    } else if (a === "--daily" || a === "-d") {
+      mode.kind = "daily";
       modeSet = true;
     } else if (a === "--custom" || a === "-c") {
       const f = argv[++i];
@@ -202,6 +207,11 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
   if (mode.kind === "quote") {
     const text = generateQuote();
     return { text, label: "quote", saveMode: "quote", timeLimit: null };
+  }
+  if (mode.kind === "daily") {
+    const day = dailyDateStr();
+    const text = generateDaily(day);
+    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null };
   }
   // custom
   let raw = mode.customText ?? "";

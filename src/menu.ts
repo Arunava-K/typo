@@ -4,7 +4,7 @@ import { buildBox, composeScreen, deleteLastWord, enterFullscreen, isWordDeleteK
 import { loadHistory, summarize } from "./history.js";
 
 export interface MenuConfig {
-  mode: "time" | "words" | "quote" | "custom";
+  mode: "time" | "words" | "quote" | "custom" | "daily";
   timeSec: number;
   wordCount: number;
   punctuation: boolean;
@@ -16,7 +16,7 @@ export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" 
 
 export const TIME_OPTS = [15, 30, 60, 120, 240];
 export const WORD_OPTS = [10, 25, 50, 100, 200];
-const MODES = ["time", "words", "quote", "custom"] as const;
+const MODES = ["time", "words", "quote", "custom", "daily"] as const;
 type ModeName = (typeof MODES)[number];
 
 export type RowId =
@@ -72,6 +72,7 @@ const MODE_LABEL: Record<ModeName, string> = {
   words: "words",
   quote: "quote",
   custom: "custom file",
+  daily: "daily",
 };
 
 export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
