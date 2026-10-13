@@ -78,8 +78,7 @@ export function calcConsistency(rawSamples: number[]): number {
 }
 
 /** Compact unicode sparkline (▁▂▃▄▅▆▇█) for WPM traces. */
-export function sparkline(values: number[], width = 30): string {
-  if (values.length === 0) return "";
+export function sparkline(values: number[], width = 30): string {  if (values.length === 0) return "";
   const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
   let vals = values;
   if (values.length > width) {
@@ -142,4 +141,83 @@ export function scoreRun(
     extraChars: extra,
     missedChars: missed,
   };
+}
+
+// --- Per-key stats (Task #2) ---
+
+/** One typed keystroke attributed to its expected char. */
+export interface KeyPressEvent {
+  /** expected char (lowercased for A-Z so Shift+letter maps to one key) */
+  key: string;
+  correct: boolean;
+  /** ms since previous keystroke; 0 = same-batch paste, excluded from avg */
+  latencyMs: number;
+}
+
+/** Fold A-Z onto a-z so capitals share their base key. */
+export function normalizeKey(ch: string): string {
+  if (ch.length === 1 && ch >= "A" && ch <= "Z") return ch.toLowerCase();
+  return ch;
+}
+
+export interface KeyStat {
+  key: string;
+  presses: number;
+  hits: number;
+  totalLatencyMs: number;
+  latencyCount: number;
+}
+
+/** Accumulate per-key presses/hits/latency from a run's key events. */
+export function accumulateKeyStats(events: KeyPressEvent[]): Map<string, KeyStat> {
+  const map = new Map<string, KeyStat>();
+  for (const e of events) {
+    let s = map.get(e.key);
+    if (!s) {
+      s = { key: e.key, presses: 0, hits: 0, totalLatencyMs: 0, latencyCount: 0 };
+      map.set(e.key, s);
+    }
+    s.presses++;
+    if (e.correct) s.hits++;
+    if (e.latencyMs > 0 && Number.isFinite(e.latencyMs) && e.latencyMs < 30000) {
+      s.totalLatencyMs += e.latencyMs;
+      s.latencyCount++;
+    }
+  }
+  return map;
+}
+
+export interface WeakKey {
+  key: string;
+  acc: number; // 0–100
+  avgMs: number; // mean inter-key latency, 0 when unknown
+  presses: number;
+}
+
+/**
+ * Worst keys first: lowest accuracy, then slowest average latency,
+ * then most presses. Only keys with >= `minPresses` qualify.
+ */
+export function worstKeys(
+  stats: Map<string, KeyStat>,
+  limit = 5,
+  minPresses = 2,
+): WeakKey[] {
+  const rows: WeakKey[] = [];
+  for (const s of stats.values()) {
+    if (s.presses < minPresses) continue;
+    rows.push({
+      key: s.key,
+      acc: (s.hits / s.presses) * 100,
+      avgMs: s.latencyCount > 0 ? s.totalLatencyMs / s.latencyCount : 0,
+      presses: s.presses,
+    });
+  }
+  rows.sort((a, b) => a.acc - b.acc || b.avgMs - a.avgMs || b.presses - a.presses);
+  return rows.slice(0, Math.max(0, limit));
+}
+
+/** Display form: space renders as ␣ so the table stays readable. */
+export function formatKey(k: string): string {
+  return k === " " ? "␣" : k;
 }

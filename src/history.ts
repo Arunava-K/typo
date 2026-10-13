@@ -12,6 +12,7 @@ export interface HistoryEntry {
   totalTyped: number;
   durationSec: number;
   consistency?: number; // 0–100, steady pace → ~100 (added v0.2, optional for old rows)
+  weakKeys?: { key: string; acc: number; avgMs: number; presses: number }[]; // worst ≤5 (Task #2)
 }
 
 function dir(): string {

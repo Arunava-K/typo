@@ -1,5 +1,15 @@
 import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
-import { buildWpmTrace, calcConsistency, scoreRun, sparkline } from "./stats.js";
+import {
+  accumulateKeyStats,
+  buildWpmTrace,
+  calcConsistency,
+  formatKey,
+  normalizeKey,
+  scoreRun,
+  sparkline,
+  worstKeys,
+  type KeyPressEvent,
+} from "./stats.js";
 import { saveResult } from "./history.js";
 
 export interface RunConfig {
@@ -346,6 +356,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
   // Per-keystroke timeline for WPM trace + consistency (Task #1).
   const samples: { t: number; correct: number; typed: number }[] = [];
+  // Per-key accuracy/latency events for worst-keys (Task #2).
+  const keyEvents: KeyPressEvent[] = [];
+  let lastKeyTime: number | null = null;
   function countCorrect(): number {
     let n = 0;
     const m = Math.min(typed.length, target.length);
@@ -473,10 +486,22 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       const trace = buildWpmTrace(traceSamples, finishElapsed);
       const consistency = calcConsistency(trace.raw);
       const trend = sparkline(trace.wpm, 30);
+      const weak = worstKeys(accumulateKeyStats(keyEvents), 5);
+      const weakStr =
+        weak.length === 0
+          ? c(ansi.gray, "—")
+          : weak
+              .map((w) =>
+                `${c(w.acc >= 95 ? ansi.green : w.acc >= 85 ? ansi.yellow : ansi.red, formatKey(w.key))}` +
+                `${c(ansi.gray, ` ${w.acc.toFixed(0)}%`)}` +
+                `${w.avgMs > 0 ? c(ansi.gray, ` ${w.avgMs.toFixed(0)}ms`) : ""}`,
+              )
+              .join(c(ansi.gray, "  "));
       const body = [
         `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
         `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}   ${c(ansi.gray, "cons ")}${c(ansi.bold + ansi.white, consistency.toFixed(1) + "%")}`,
         `${c(ansi.gray, "trend".padEnd(6))}${c(ansi.cyan, trend || "—")}`,
+        `${c(ansi.gray, "weak".padEnd(6))}${weakStr}`,
         "",
         `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
@@ -507,6 +532,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       finishElapsed,
     );
     const finConsistency = Math.round(calcConsistency(finTrace.raw) * 10) / 10;
+    const finWeak = worstKeys(accumulateKeyStats(keyEvents), 5).map((w) => ({
+      key: w.key,
+      acc: Math.round(w.acc * 10) / 10,
+      avgMs: Math.round(w.avgMs),
+      presses: w.presses,
+    }));
     saveResult({
       date: new Date().toISOString(),
       mode: cfg.saveMode,
@@ -517,6 +548,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       totalTyped: typed.length,
       durationSec: Math.round(finishElapsed * 10) / 10,
       consistency: finConsistency,
+      weakKeys: finWeak,
     })
       .then(() => {
         resultSaved = true;
@@ -571,6 +603,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
             typed = deleteLastWord(typed);
             snapshot();
             lastKeyAt = Date.now();
+            lastKeyTime = Date.now();
             draw();
           }
           return;
@@ -583,6 +616,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
             typed = typed.slice(0, -1);
             snapshot();
             lastKeyAt = Date.now();
+            lastKeyTime = Date.now();
             draw();
           }
           return;
@@ -592,6 +626,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           typed = "";
           snapshot();
           lastKeyAt = Date.now();
+          lastKeyTime = Date.now();
           draw();
           return;
         }
@@ -600,6 +635,8 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
         // printable input (may contain multiple chars if pasted)
         let added = false;
+        const batchAt = Date.now();
+        let firstInBatch = true;
         for (const ch of data) {
           const code = ch.codePointAt(0)!;
           if (code < 32 || code === 127) continue; // control
@@ -608,7 +645,14 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           const pos = typed.length;
           typed += ch;
           totalKeystrokes++;
-          if (pos < target.length && ch === target[pos]) correctKeystrokes++;
+          const expected = pos < target.length ? target[pos]! : ch;
+          const hit = pos < target.length && ch === target[pos];
+          if (hit) correctKeystrokes++;
+          // Latency: time since previous keystroke batch. Chars after the
+          // first in a pasted batch get 0 (excluded from avg in stats).
+          const latency = lastKeyTime == null || firstInBatch === false ? 0 : batchAt - lastKeyTime;
+          keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
+          firstInBatch = false;
           added = true;
         }
         void correctKeystrokes;
@@ -616,6 +660,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (added) {
           snapshot();
           lastKeyAt = Date.now();
+          lastKeyTime = batchAt;
           draw();
           checkEnd();
         }
