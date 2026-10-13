@@ -19,6 +19,16 @@ export const WORD_OPTS = [10, 25, 50, 100, 200];
 const MODES = ["time", "words", "quote", "custom", "daily"] as const;
 type ModeName = (typeof MODES)[number];
 
+/**
+ * Center each visible line within `width`. Blocks built by `buildBox` and the
+ * footer below it are narrower than the content column, so left-aligning them
+ * (as `composeScreen` does) pushes the panel off-center. Centering them here
+ * lets the global column pad keep everything symmetric.
+ */
+function centerBlock(lines: string[], width: number): string[] {
+  return lines.map((l) => (l.length === 0 ? "" : padCenter(l, width)));
+}
+
 export type RowId =
   | "mode"
   | "time"
@@ -163,7 +173,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         ...inner.map((l) => c(ansi.gray, l)),
       ];
       const lines = [...buildBox(content), "", c(ansi.gray, "press any key to go back")];
-      stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
+      stdout.write(composeScreen(centerBlock(lines, contentWidth), vpCols, vpRows, contentWidth));
       return;
     }
 
@@ -196,7 +206,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     if (message) {
       lines.push(c(ansi.red, message));
     }
-    stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
+    stdout.write(composeScreen(centerBlock(lines, contentWidth), vpCols, vpRows, contentWidth));
   }
 
   function adjust(id: RowId, dir: 1 | -1): void {
