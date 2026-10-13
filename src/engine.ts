@@ -174,9 +174,10 @@ export function deleteLastWord(s: string): string {
 
 /**
  * True for every key sequence that means "delete word": Ctrl+W (23),
- * Ctrl+X-adjacent (24), and ESC DEL / ESC BS — which is what most
- * terminals send for Ctrl+Backspace and Alt+Backspace. Uses char codes
- * so no terminal-specific string matching is needed.
+ * Ctrl+X-adjacent (24), ESC DEL / ESC BS, xterm CSI sequences, and the
+ * CSI u keyboard protocol used by modern terminals (kitty, Ghostty,
+ * WezTerm, foot, VS Code). Uses char codes so no terminal-specific
+ * string matching is needed.
  */
 export function isWordDeleteKey(data: string): boolean {
   if (data.length === 1) {
@@ -187,19 +188,42 @@ export function isWordDeleteKey(data: string): boolean {
     const c1 = data.charCodeAt(1);
     return c1 === 127 || c1 === 8;
   }
-  // CSI 3 ; 5 ~ (Ctrl+Delete) and CSI 3 ; 3 ~ (Alt+Delete): with the
+  // CSI 3 ; m ~ (xterm Delete with modifiers, e.g. Ctrl+Delete): with the
   // cursor pinned to the end of input there is nothing ahead to delete,
-  // so treat the intent as a word delete as well.
+  // so treat the intent as a word delete as well. Modifier digit 2 is
+  // shift-only, everything else up to 8 involves alt and/or ctrl.
   if (
     data.length === 6 &&
     data.charCodeAt(0) === 27 &&
     data.charCodeAt(1) === 91 &&
     data.charCodeAt(2) === 51 &&
     data.charCodeAt(3) === 59 &&
-    (data.charCodeAt(4) === 53 || data.charCodeAt(4) === 51) &&
+    data.charCodeAt(4) >= 51 &&
+    data.charCodeAt(4) <= 56 &&
     data.charCodeAt(5) === 126
   ) {
     return true;
+  }
+  // CSI u keyboard protocol: ESC [ code (; mods)? u. A ctrl/alt-modified
+  // Backspace (8/127) or Delete (3) key means delete word. Plain
+  // (unmodified, shift-only) presses are single deletes — not matched.
+  if (
+    data.length >= 4 &&
+    data.charCodeAt(0) === 27 &&
+    data.charCodeAt(1) === 91 &&
+    data.charCodeAt(data.length - 1) === 117
+  ) {
+    const parts = data.slice(2, -1).split(";");
+    if (
+      parts.length <= 2 &&
+      parts.every((p) => p.length > 0 && p.length <= 6 && /^[0-9]+$/.test(p))
+    ) {
+      const code = Number(parts[0]);
+      const mods = parts.length === 2 ? Number(parts[1]) : 1;
+      if ((code === 8 || code === 127 || code === 3) && mods !== 1 && mods !== 2) {
+        return true;
+      }
+    }
   }
   return false;
 }
