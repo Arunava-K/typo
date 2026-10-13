@@ -94,6 +94,215 @@ export async function saveResult(entry: HistoryEntry): Promise<void> {
   await fs.writeFile(file(), JSON.stringify(trimmed, null, 2), "utf8");
 }
 
+/** Overwrite the whole history file (used by --import after validation). */
+export async function writeHistory(hist: HistoryEntry[]): Promise<void> {
+  await fs.mkdir(dir(), { recursive: true });
+  await fs.writeFile(file(), JSON.stringify(hist.slice(-500), null, 2), "utf8");
+}
+
+// --- Export / import (Task #11) ---
+// CSV: flat scalar columns, spreadsheet-friendly (no nested fields).
+// JSON: full fidelity incl. weakKeys/mistakes — the round-trip format.
+
+const CSV_COLS = [
+  "date",
+  "mode",
+  "wpm",
+  "raw",
+  "gross",
+  "acc",
+  "consistency",
+  "correctChars",
+  "totalTyped",
+  "durationSec",
+  "cpm",
+  "corrections",
+] as const;
+
+function csvCell(v: string | number): string {
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/** History → CSV text (header + one row per run). */
+export function exportCsv(hist: HistoryEntry[]): string {
+  const lines = [CSV_COLS.join(",")];
+  for (const h of hist) {
+    lines.push(
+      [
+        csvCell(h.date),
+        csvCell(h.mode),
+        h.wpm,
+        h.raw,
+        h.gross ?? "",
+        h.acc,
+        h.consistency ?? "",
+        h.correctChars,
+        h.totalTyped,
+        h.durationSec,
+        h.cpm ?? "",
+        h.corrections ?? "",
+      ].join(","),
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** History → pretty JSON text (full fidelity). */
+export function exportJson(hist: HistoryEntry[]): string {
+  return JSON.stringify(hist, null, 2) + "\n";
+}
+
+/** Minimal RFC-4180 line splitter (quotes, escaped "", commas). */
+function splitCsvLine(line: string): string[] {
+  const cells: string[] = [];
+  let cur = "";
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (inQ) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else {
+          inQ = false;
+        }
+      } else {
+        cur += ch;
+      }
+    } else if (ch === '"') {
+      inQ = true;
+    } else if (ch === ",") {
+      cells.push(cur);
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  cells.push(cur);
+  return cells;
+}
+
+const REQUIRED_NUMS = ["wpm", "raw", "acc", "correctChars", "totalTyped", "durationSec"] as const;
+const OPTIONAL_NUMS = ["gross", "consistency", "cpm", "corrections"] as const;
+
+/** Validate one raw object into a HistoryEntry; null when malformed. */
+export function toEntry(o: unknown): HistoryEntry | null {
+  if (!o || typeof o !== "object") return null;
+  const r = o as Record<string, unknown>;
+  if (typeof r["date"] !== "string" || !Number.isFinite(Date.parse(r["date"] as string))) return null;
+  if (typeof r["mode"] !== "string" || (r["mode"] as string).length === 0) return null;
+  const nums: Record<string, number> = {};
+  for (const k of REQUIRED_NUMS) {
+    const v = typeof r[k] === "string" && r[k] !== "" ? Number(r[k]) : r[k];
+    if (typeof v !== "number" || !Number.isFinite(v)) return null;
+    nums[k] = v;
+  }
+  const entry: HistoryEntry = {
+    date: r["date"] as string,
+    mode: r["mode"] as string,
+    wpm: nums["wpm"]!,
+    raw: nums["raw"]!,
+    acc: nums["acc"]!,
+    correctChars: nums["correctChars"]!,
+    totalTyped: nums["totalTyped"]!,
+    durationSec: nums["durationSec"]!,
+  };
+  for (const k of OPTIONAL_NUMS) {
+    const rawV = r[k];
+    const v = typeof rawV === "string" && rawV !== "" ? Number(rawV) : rawV;
+    if (typeof v === "number" && Number.isFinite(v)) {
+      (entry as unknown as Record<string, unknown>)[k] = v;
+    }
+  }
+  if (Array.isArray(r["weakKeys"])) {
+    const wk = (r["weakKeys"] as unknown[]).filter(
+      (w): w is { key: string; acc: number; avgMs: number; presses: number } =>
+        !!w && typeof w === "object" &&
+        typeof (w as Record<string, unknown>)["key"] === "string" &&
+        ["acc", "avgMs", "presses"].every((k) => typeof (w as Record<string, unknown>)[k] === "number"),
+    );
+    if (wk.length > 0) entry.weakKeys = wk.slice(0, 5);
+  }
+  if (Array.isArray(r["mistakes"])) {
+    const mk = (r["mistakes"] as unknown[]).filter(
+      (m): m is { word: string; typed: string } =>
+        !!m && typeof m === "object" &&
+        typeof (m as Record<string, unknown>)["word"] === "string" &&
+        typeof (m as Record<string, unknown>)["typed"] === "string",
+    );
+    if (mk.length > 0) entry.mistakes = mk.slice(0, 20);
+  }
+  return entry;
+}
+
+/** Parse JSON export text into raw rows (throws with a friendly message). */
+export function parseJsonExport(text: string): unknown[] {
+  let v: unknown;
+  try {
+    v = JSON.parse(text);
+  } catch {
+    throw new Error("Not valid JSON.");
+  }
+  if (!Array.isArray(v)) throw new Error("JSON import must be an array of runs (typo --export json).");
+  return v;
+}
+
+/** Parse CSV export text into raw row objects (throws with a friendly message). */
+export function parseCsvExport(text: string): Record<string, string>[] {
+  const lines = text.split("\n").map((l) => (l.endsWith("\r") ? l.slice(0, -1) : l));
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  if (lines.length === 0) throw new Error("CSV is empty.");
+  const header = splitCsvLine(lines[0]!);
+  for (const c of ["date", "mode", ...REQUIRED_NUMS]) {
+    if (!header.includes(c)) throw new Error(`CSV is missing required column: ${c}`);
+  }
+  return lines.slice(1).filter((l) => l !== "").map((l) => {
+    const cells = splitCsvLine(l);
+    const o: Record<string, string> = {};
+    header.forEach((name, i) => {
+      o[name] = cells[i] ?? "";
+    });
+    return o;
+  });
+}
+
+function dedupeKey(h: HistoryEntry): string {
+  return `${h.date}|${h.mode}|${h.wpm}|${h.durationSec}`;
+}
+
+/**
+ * Merge validated-then-counted raw rows into existing history.
+ * Duplicates (same date+mode+wpm+duration) skip; malformed rows reject.
+ * Result capped at the newest 500, like saveResult.
+ */
+export function importRows(
+  existing: HistoryEntry[],
+  raw: unknown[],
+): { merged: HistoryEntry[]; imported: number; skipped: number; invalid: number } {
+  const seen = new Set(existing.map(dedupeKey));
+  const out = [...existing];
+  let imported = 0;
+  let skipped = 0;
+  let invalid = 0;
+  for (const r of raw) {
+    const e = toEntry(r);
+    if (!e) {
+      invalid++;
+      continue;
+    }
+    if (seen.has(dedupeKey(e))) {
+      skipped++;
+      continue;
+    }
+    seen.add(dedupeKey(e));
+    out.push(e);
+    imported++;
+  }
+  return { merged: out.slice(-500), imported, skipped, invalid };
+}
+
 // --- Personal-best matrix (Task #6) ---
 
 export interface ModeBest {

@@ -2,7 +2,16 @@
 import { promises as fs } from "node:fs";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
-import { loadHistory, summarize } from "./history.js";
+import {
+  exportCsv,
+  exportJson,
+  importRows,
+  loadHistory,
+  parseCsvExport,
+  parseJsonExport,
+  summarize,
+  writeHistory,
+} from "./history.js";
 import { runMenu, type MenuConfig } from "./menu.js";
 import { runReplay } from "./replay.js";
 import { ansi, c } from "./ui.js";
@@ -41,6 +50,8 @@ ${c(ansi.bold, "Other:")}
   --history          show past results, PBs, averages & activity
   --history --mode <m>   filter history by mode, e.g. "time" (repeatable)
   --history --last <n>   show last n runs (default 10)
+  --export <csv|json>  print history to stdout (redirect to a file)
+  --import <file>      merge exported runs back in (dedupes)
   --replay           replay your last run keystroke-by-keystroke
   --debug-keys       press keys to see their codes (diagnose shortcuts)
   -h, --help         show this help
@@ -63,7 +74,7 @@ ${c(ansi.bold, "Examples:")}
 `);
 }
 
-function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean; replay: boolean; historyModes: string[]; historyLast: number | null } {
+function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean; replay: boolean; historyModes: string[]; historyLast: number | null; exportFmt: "csv" | "json" | null; importFile: string | null } {
   const mode: Mode = {
     kind: "time",
     timeSec: 30,
@@ -80,6 +91,8 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   let replay = false;
   const historyModes: string[] = [];
   let historyLast: number | null = null;
+  let exportFmt: "csv" | "json" | null = null;
+  let importFile: string | null = null;
   let modeSet = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -174,6 +187,20 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       historyLast = v;
     } else if (a === "--replay") {
       replay = true;
+    } else if (a === "--export") {
+      const v = argv[++i];
+      if (v !== "csv" && v !== "json") {
+        console.error(`Invalid --export value: ${argv[i]} (use csv or json)`);
+        process.exit(1);
+      }
+      exportFmt = v;
+    } else if (a === "--import") {
+      const f = argv[++i];
+      if (!f) {
+        console.error("Missing file for --import");
+        process.exit(1);
+      }
+      importFile = f;
     } else if (a === "--debug-keys") {
       debugKeys = true;
     } else if (a === "--help" || a === "-h") {
@@ -190,7 +217,18 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     console.error("--mode and --last need --history (e.g. typo --history --mode quote)");
     process.exit(1);
   }
-  return { mode, history, help, version, debugKeys, replay, historyModes, historyLast };
+  const standaloneCount = [help, version, debugKeys, history, replay, exportFmt != null, importFile != null].filter(
+    Boolean,
+  ).length;
+  if (standaloneCount > 1) {
+    console.error("--history, --replay, --export, --import, --debug-keys, --help and --version can't be combined.");
+    process.exit(1);
+  }
+  if ((exportFmt != null || importFile != null) && (modeSet || mode.punctuation || mode.numbers)) {
+    console.error("--export and --import can't be combined with test options.");
+    process.exit(1);
+  }
+  return { mode, history, help, version, debugKeys, replay, historyModes, historyLast, exportFmt, importFile };
 }
 
 async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null }> {
@@ -313,7 +351,8 @@ async function main(): Promise<void> {
     await menuLoop();
     return;
   }
-  const { mode, history, help, version, debugKeys, replay, historyModes, historyLast } = parseArgs(args);
+  const { mode, history, help, version, debugKeys, replay, historyModes, historyLast, exportFmt, importFile } =
+    parseArgs(args);
   if (help) {
     printHelp();
     return;
@@ -333,6 +372,34 @@ async function main(): Promise<void> {
   }
   if (replay) {
     await runReplay();
+    return;
+  }
+  if (exportFmt) {
+    const hist = await loadHistory();
+    process.stdout.write(exportFmt === "csv" ? exportCsv(hist) : exportJson(hist));
+    return;
+  }
+  if (importFile) {
+    let text: string;
+    try {
+      text = await fs.readFile(importFile, "utf8");
+    } catch {
+      console.error(`Could not read file: ${importFile}`);
+      process.exit(1);
+    }
+    let raw: unknown[];
+    try {
+      raw = text.trimStart().startsWith("[") ? parseJsonExport(text) : parseCsvExport(text);
+    } catch (e) {
+      console.error(`Could not import: ${(e as Error).message}`);
+      process.exit(1);
+    }
+    const res = importRows(await loadHistory(), raw);
+    await writeHistory(res.merged);
+    const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? "" : "s"}`;
+    console.log(
+      `Imported ${plural(res.imported, "run")} (${plural(res.skipped, "duplicate")} skipped, ${plural(res.invalid, "invalid row")} rejected). Total: ${plural(res.merged.length, "run")}.`,
+    );
     return;
   }
 

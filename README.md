@@ -40,6 +40,8 @@ custom file, or history, all without memorizing flags.
 | `--history --mode <m>` | Filter history by mode, e.g. `"time"` (repeatable) |
 | `--history --last <n>` | Show last n runs (default 10) |
 | `--replay` | Replay your last run keystroke-by-keystroke |
+| `--export <csv\|json>` | Print history to stdout (`> backup.csv`) |
+| `--import <file>` | Merge exported runs back in (dedupes) |
 | `--debug-keys` | Show key codes to diagnose shortcuts |
 | `-h, --help` | Help |
 | `--version` | Version |
