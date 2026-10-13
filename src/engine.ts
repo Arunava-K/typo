@@ -11,6 +11,29 @@ export interface RunConfig {
 
 export type AfterAction = "quit" | "restart" | "next";
 
+// Fullscreen canvas: alternate screen buffer (restored on exit),
+// so scrollback / prompt position can't push content around.
+const ENTER_ALT = "\x1b[?1049h\x1b[2J\x1b[H";
+const LEAVE_ALT = "\x1b[?1049l";
+
+/** Enter the fullscreen canvas (alternate screen buffer). */
+export function enterFullscreen(): void {
+  try {
+    process.stdout.write(ENTER_ALT + ansi.hideCursor);
+  } catch {
+    /* noop */
+  }
+}
+
+/** Leave the fullscreen canvas (safe to call even if not entered). */
+export function leaveFullscreen(): void {
+  try {
+    process.stdout.write(LEAVE_ALT + ansi.showCursor);
+  } catch {
+    /* noop */
+  }
+}
+
 /** Split global char indices into wrapped lines (greedy by words). */
 export function layoutLines(target: string, width: number): number[][] {
   const words: { start: number; len: number }[] = [];
@@ -65,6 +88,42 @@ export function layoutLines(target: string, width: number): number[][] {
   return lines;
 }
 
+// --- Pure, unit-testable layout helpers ---
+
+/** Visible text rows to show, given viewport height (reserve ~9 for HUD/footer). */
+export function textWindowSize(vpRows: number): number {
+  return Math.max(2, Math.min(5, vpRows - 9));
+}
+
+/** Leading spaces to center a contentWidth column in vpCols. */
+export function centerPad(vpCols: number, contentWidth: number): string {
+  return " ".repeat(Math.max(0, Math.floor((vpCols - contentWidth) / 2)));
+}
+
+/** Blank lines above content to vertically center lineCount rows in vpRows. */
+export function topPadFor(lineCount: number, vpRows: number): number {
+  return Math.max(0, Math.floor((vpRows - lineCount) / 2));
+}
+
+/**
+ * Assemble the final frame: erase + home + vertical pad + left-padded lines.
+ * Pure function so centering math can be verified without a TTY.
+ */
+export function composeScreen(
+  screenLines: string[],
+  vpCols: number,
+  vpRows: number,
+  contentWidth: number,
+): string {
+  const pad = centerPad(vpCols, contentWidth);
+  const top = "\n".repeat(topPadFor(screenLines.length, vpRows));
+  let out = ansi.clearScreen + ansi.hideCursor + top;
+  for (const ln of screenLines) {
+    out += (ln.length === 0 ? "" : pad) + ln + "\n";
+  }
+  return out;
+}
+
 function renderChar(
   target: string,
   typed: string,
@@ -96,12 +155,72 @@ function renderChar(
   return c(ansi.gray, display);
 }
 
+/**
+ * Measure the TRUE visible viewport height via a cursor-position report
+ * (DSR/CPR). Falls back to termHeight() when the terminal doesn't answer.
+ * Any user keystrokes typed during the ~200ms probe are returned as
+ * `pending` so they can be replayed instead of swallowed.
+ */
+function calibrateViewport(timeoutMs = 200): Promise<{ rows: number; scale: number; pending: string }> {
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+  const ioctlRows = termHeight();
+  return new Promise((resolve) => {
+    let buf = "";
+    let finished = false;
+    const done = (rows: number | null) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      stdin.off("data", onData);
+      if (rows != null && rows >= 5 && rows <= 500 && ioctlRows > 0) {
+        resolve({ rows, scale: rows / ioctlRows, pending: buf.replace(/\x1b\[\d+;\d+R/, "") });
+      } else {
+        resolve({
+          rows: ioctlRows > 0 ? ioctlRows : 24,
+          scale: 1,
+          pending: buf.replace(/\x1b\[\d+;\d+R/, ""),
+        });
+      }
+    };
+    const timer = setTimeout(() => done(null), timeoutMs);
+    const onData = (chunk: Buffer) => {
+      buf += chunk.toString("utf8");
+      const m = buf.match(/\x1b\[(\d+);(\d+)R/);
+      if (m) done(parseInt(m[1]!, 10));
+    };
+    stdin.on("data", onData);
+    // save cursor, jump far past the bottom (clamps to the real last row),
+    // ask where we landed, restore cursor.
+    stdout.write("\x1b7\x1b[999;1H\x1b[6n\x1b8");
+  });
+}
+
 export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   const { target } = cfg;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.error("typo needs an interactive terminal (TTY).");
     return "quit";
   }
+
+  const stdin = process.stdin;
+  const stdout = process.stdout;
+
+  // Enter fullscreen canvas BEFORE anything is drawn.
+  stdin.setEncoding("utf8");
+  try {
+    stdin.setRawMode(true);
+  } catch {
+    /* noop */
+  }
+  stdin.resume();
+  stdout.write(ENTER_ALT);
+
+  // True viewport size (don't trust winsize blindly for centering).
+  const cal = await calibrateViewport();
+  let vpCols = termWidth();
+  let vpRows = cal.rows;
+  const rowScale = cal.scale;
 
   let typed = "";
   let correctKeystrokes = 0;
@@ -110,9 +229,6 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let finished = false;
   let finishElapsed = 0;
   let resultSaved = false;
-
-  const stdin = process.stdin;
-  const stdout = process.stdout;
 
   function elapsed(): number {
     if (startTime === null) return 0;
@@ -125,12 +241,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   }
 
   function draw() {
-    const width = Math.max(40, termWidth());
-    const height = Math.max(10, termHeight());
-    // App-like centered column (Monkeytype style): cap content width,
-    // pad it horizontally so it sits in the middle of wide terminals.
-    const contentWidth = Math.min(width, 80);
-    const leftPad = " ".repeat(Math.max(0, Math.floor((width - contentWidth) / 2)));
+    const contentWidth = Math.min(vpCols, 80);
     const e = elapsed();
     const s = liveScore();
     const timeLabel =
@@ -151,7 +262,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     const filled = Math.round(progress * barW);
     const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barW - filled));
 
-    // Build the screen as discrete lines, then center vertically.
+    // Build the screen as discrete lines, then center via composeScreen.
     const lines: string[] = [];
     // header
     lines.push(
@@ -183,7 +294,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           cursorLine = Math.min(li + 1, textLines.length - 1);
         }
       }
-      const WIN = 5;
+      const WIN = textWindowSize(vpRows);
       let start = Math.max(0, cursorLine - 1);
       if (start + WIN > textLines.length) start = Math.max(0, textLines.length - WIN);
       const end = Math.min(textLines.length, start + WIN);
@@ -229,13 +340,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       );
     }
 
-    const topPad = Math.max(0, Math.floor((height - lines.length) / 2));
-    let out = ansi.clearScreen + ansi.hideCursor + "\n".repeat(topPad);
-    for (const ln of lines) {
-      out += (ln.length === 0 ? "" : leftPad) + ln + "\n";
-    }
-
-    stdout.write(out);
+    stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
   }
 
   function finish() {
@@ -282,6 +387,8 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   return new Promise<AfterAction>((resolve) => {
     const onData = (chunk: Buffer) => {
       const data = chunk.toString("utf8");
+      // Stray cursor-position reports (from viewport probing) are never input.
+      if (/^\x1b\[\d+;\d+R/.test(data)) return;
 
       // Ctrl-C
       if (data === "\x03") {
@@ -370,7 +477,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       }
     };
 
-    const onResize = () => draw();
+    const onResize = () => {
+      // Re-derive from winsize, corrected by the DSR scale measured at startup.
+      vpCols = termWidth();
+      vpRows = Math.max(8, Math.min(500, Math.round(termHeight() * rowScale)));
+      draw();
+    };
 
     function cleanup() {
       clearInterval(tick);
@@ -378,18 +490,17 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       process.stdout.off("resize", onResize);
       try {
         stdin.setRawMode(false);
-      } catch { /* noop */ }
+      } catch {
+        /* noop */
+      }
       stdin.pause();
-      stdout.write(ansi.showCursor);
+      stdout.write(LEAVE_ALT + ansi.showCursor);
     }
 
-    stdin.setEncoding("utf8");
-    try {
-      stdin.setRawMode(true);
-    } catch { /* noop */ }
-    stdin.resume();
     stdin.on("data", onData);
     process.stdout.on("resize", onResize);
+    // Replay anything typed during viewport calibration.
+    if (cal.pending) onData(Buffer.from(cal.pending, "utf8"));
 
     const tick = setInterval(() => {
       if (!finished) {

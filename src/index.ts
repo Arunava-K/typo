@@ -215,7 +215,7 @@ async function main(): Promise<void> {
     };
     const action = await runTest(cfg);
     if (action === "quit") {
-      process.stdout.write(ansi.clearScreen);
+      // runTest already restored the normal screen; just say goodbye.
       console.log(c(ansi.gray, "Thanks for practicing. Type fast, stay calm."));
       break;
     }
@@ -227,6 +227,10 @@ async function main(): Promise<void> {
 main().catch((err) => {
   try {
     process.stdout.write(ansi.showCursor);
+  } catch { /* noop */ }
+  try {
+    // ensure we leave the fullscreen canvas on a crash mid-test
+    process.stdout.write("\x1b[?1049l");
   } catch { /* noop */ }
   try {
     process.stdin.setRawMode!(false);
