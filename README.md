@@ -57,7 +57,7 @@ typo --history          # past scores
 - **While typing:** just start typing to begin the timer · `esc` quit · `backspace` fix · `ctrl+w` / `ctrl+backspace` delete word · `ctrl+u` clear
 - **On results:** `r` retry · `tab`/`n` next test · `q`/`esc` quit
 
-Live HUD shows countdown (or elapsed), live WPM and accuracy. Results show WPM, raw WPM, accuracy, char breakdown, and are saved to `~/.typo/history.json`.
+Live HUD shows countdown (or elapsed), live WPM, accuracy, current-word burst and consistency. Results show WPM, raw + gross WPM, accuracy, consistency, WPM trend, worst keys, CPM, corrections and char breakdown, and are saved to `~/.typo/history.json`.
 
 ### Shortcut not working?
 

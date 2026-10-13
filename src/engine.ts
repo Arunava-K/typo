@@ -349,6 +349,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let typed = "";
   let correctKeystrokes = 0;
   let totalKeystrokes = 0;
+  let corrections = 0; // correction-key presses (Task #4)
   let startTime: number | null = null;
   let finished = false;
   let finishElapsed = 0;
@@ -514,7 +515,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       lines.push(c(ansi.gray, "esc quit   ·   ctrl+w / ctrl+backspace delete word   ·   backspace fix"));
     } else {
       // results — framed panel
-      const f = scoreRun(target, typed, finishElapsed);
+      const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
       const traceSamples = samples.map((s) => ({
         tSec: s.t,
         correctChars: s.correct,
@@ -540,12 +541,13 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
               )
               .join(c(ansi.gray, "  "));
       const body = [
-        `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
+        `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}   ${c(ansi.gray, "gross " + f.gross.toFixed(1))}`,
         `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}   ${c(ansi.gray, "cons ")}${c(ansi.bold + ansi.white, consistency.toFixed(1) + "%")}`,
         `${c(ansi.gray, "trend".padEnd(6))}${c(ansi.cyan, trend || "—")}`,
         `${c(ansi.gray, "weak".padEnd(6))}${weakStr}`,
         "",
         `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
+        `${c(ansi.gray, "cpm".padEnd(6))}${c(ansi.bold + ansi.white, f.cpm.toFixed(0))}   ${c(ansi.gray, "raw " + f.cpmRaw.toFixed(0))}   ${c(ansi.gray, String(f.corrections) + (f.corrections === 1 ? " correction" : " corrections"))}`,
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
       ];
       if (resultSaved) body.push(c(ansi.gray, "saved to ~/.typo/history.json"));
@@ -567,7 +569,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     finishElapsed = startTime === null ? 0 : (Date.now() - startTime) / 1000;
     if (finishElapsed < 0.5) finishElapsed = 0.5;
     snapshot();
-    const f = scoreRun(target, typed, finishElapsed);
+    const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
     const finTrace = buildWpmTrace(
       [...samples.map((s) => ({ tSec: s.t, correctChars: s.correct, typedLen: s.typed })),
         { tSec: finishElapsed, correctChars: f.correctChars, typedLen: typed.length }],
@@ -591,6 +593,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       durationSec: Math.round(finishElapsed * 10) / 10,
       consistency: finConsistency,
       weakKeys: finWeak,
+      gross: Math.round(f.gross * 10) / 10,
+      cpm: Math.round(f.cpm),
+      corrections: f.corrections,
     })
       .then(() => {
         resultSaved = true;
@@ -643,6 +648,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (isWordDeleteKey(data)) {
           if (typed.length > 0) {
             typed = deleteLastWord(typed);
+            corrections++;
             snapshot();
             lastKeyAt = Date.now();
             lastKeyTime = Date.now();
@@ -656,6 +662,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (data === "\x7f" || data === "\x08") {
           if (typed.length > 0) {
             typed = typed.slice(0, -1);
+            corrections++;
             snapshot();
             lastKeyAt = Date.now();
             lastKeyTime = Date.now();
@@ -665,6 +672,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         }
         // Ctrl-U: clear all
         if (data === "\x15") {
+          if (typed.length > 0) corrections++;
           typed = "";
           snapshot();
           lastKeyAt = Date.now();
@@ -697,8 +705,6 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           firstInBatch = false;
           added = true;
         }
-        void correctKeystrokes;
-        void totalKeystrokes;
         if (added) {
           snapshot();
           lastKeyAt = Date.now();

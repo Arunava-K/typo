@@ -20,6 +20,18 @@ export function calcRawWpm(totalTyped: number, elapsedSec: number): number {
   return totalTyped / 5 / (elapsedSec / 60);
 }
 
+/** Gross WPM counts every keystroke ever pressed (incl. later-deleted). */
+export function calcGrossWpm(totalKeystrokes: number, elapsedSec: number): number {
+  if (elapsedSec <= 0) return 0;
+  return totalKeystrokes / 5 / (elapsedSec / 60);
+}
+
+/** CPM: correct chars (incl. spaces) per minute. */
+export function calcCpm(correctChars: number, elapsedSec: number): number {
+  if (elapsedSec <= 0) return 0;
+  return correctChars / (elapsedSec / 60);
+}
+
 export function calcAccuracy(correctKeystrokes: number, totalKeystrokes: number): number {
   if (totalKeystrokes === 0) return 100;
   return (correctKeystrokes / totalKeystrokes) * 100;
@@ -116,19 +128,29 @@ export function sparkline(values: number[], width = 30): string {  if (values.le
 /**
  * Score a finished (or in-progress) run by comparing typed vs target
  * char-by-char. Extra chars beyond target count as incorrect.
+ *
+ * Pass `opts.totalKeystrokes` (every printable press, incl. later-deleted)
+ * for a true gross WPM; otherwise gross falls back to buffer-based raw.
+ * Pass `opts.corrections` (backspace/word-delete/clear presses) to report
+ * it alongside the char breakdown.
  */
 export function scoreRun(
   target: string,
   typed: string,
   elapsedSec: number,
+  opts: { totalKeystrokes?: number; corrections?: number } = {},
 ): {
   wpm: number;
   raw: number;
+  gross: number;
   acc: number;
   correctChars: number;
   incorrectChars: number;
   extraChars: number;
   missedChars: number;
+  cpm: number;
+  cpmRaw: number;
+  corrections: number;
 } {
   let correct = 0;
   let incorrect = 0;
@@ -142,14 +164,19 @@ export function scoreRun(
   const missed = Math.max(0, target.length - typed.length);
   // typed-vs-target per-keystroke accuracy here equals correct / typed
   const acc = typed.length === 0 ? 100 : (correct / typed.length) * 100;
+  const raw = calcRawWpm(typed.length, elapsedSec);
   return {
     wpm: calcWpm(correct, elapsedSec),
-    raw: calcRawWpm(typed.length, elapsedSec),
+    raw,
+    gross: opts.totalKeystrokes != null ? calcGrossWpm(opts.totalKeystrokes, elapsedSec) : raw,
     acc,
     correctChars: correct,
     incorrectChars: incorrect - extra < 0 ? 0 : incorrect - extra,
     extraChars: extra,
     missedChars: missed,
+    cpm: calcCpm(correct, elapsedSec),
+    cpmRaw: elapsedSec <= 0 ? 0 : typed.length / (elapsedSec / 60),
+    corrections: opts.corrections ?? 0,
   };
 }
 
