@@ -25,6 +25,16 @@ export function calcAccuracy(correctKeystrokes: number, totalKeystrokes: number)
   return (correctKeystrokes / totalKeystrokes) * 100;
 }
 
+/**
+ * Current-word burst WPM: correct chars in the active word over the time
+ * spent in it. Returns 0 below `minSec` to avoid spike artifacts on
+ * word entry. Pure wrapper over calcWpm for testability (Task #3).
+ */
+export function calcBurst(correctInWord: number, elapsedSec: number, minSec = 0.2): number {
+  if (elapsedSec < minSec) return 0;
+  return calcWpm(correctInWord, elapsedSec);
+}
+
 /** One snapshot of run progress, for WPM-over-time traces. */
 export interface TimelineSample {
   tSec: number; // seconds since first keystroke

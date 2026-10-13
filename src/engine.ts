@@ -2,6 +2,7 @@ import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
 import {
   accumulateKeyStats,
   buildWpmTrace,
+  calcBurst,
   calcConsistency,
   formatKey,
   normalizeKey,
@@ -359,6 +360,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   // Per-key accuracy/latency events for worst-keys (Task #2).
   const keyEvents: KeyPressEvent[] = [];
   let lastKeyTime: number | null = null;
+  // Active-word burst tracking (Task #3): word start index + entry time.
+  // Updated in draw() (runs on every keystroke + 4x/sec tick).
+  let burstWordStart: number | null = null;
+  let burstStartTime: number | null = null;
   function countCorrect(): number {
     let n = 0;
     const m = Math.min(typed.length, target.length);
@@ -391,6 +396,39 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     const word = currentWordRange(target, Math.min(typed.length, target.length));
     const e = elapsed();
     const s = liveScore();
+    // Live burst + consistency (Task #3). Burst resets on word change
+    // (incl. backspacing into another word); idle draws before the first
+    // keystroke leave burst state untouched so the first word isn't
+    // diluted by pre-start idle time.
+    const nowMs = Date.now();
+    let burst = 0;
+    let burstReady = false;
+    if (startTime !== null) {
+      const bw = currentWordRange(target, Math.min(typed.length, target.length));
+      if (bw != null) {
+        if (burstWordStart !== bw.start) {
+          burstWordStart = bw.start;
+          burstStartTime = nowMs;
+        }
+        if (burstStartTime != null) {
+          let correctInWord = 0;
+          for (let i = bw.start; i < typed.length && i < bw.end; i++) {
+            if (typed[i] === target[i]) correctInWord++;
+          }
+          burst = calcBurst(correctInWord, (nowMs - burstStartTime) / 1000);
+          burstReady = true;
+        }
+      }
+    }
+    // Live consistency needs a few seconds of trace to be meaningful.
+    let liveCons: number | null = null;
+    if (startTime !== null && e >= 3 && samples.length >= 2) {
+      const cur = [
+        ...samples.map((sm) => ({ tSec: sm.t, correctChars: sm.correct, typedLen: sm.typed })),
+        { tSec: e, correctChars: countCorrect(), typedLen: typed.length },
+      ];
+      liveCons = calcConsistency(buildWpmTrace(cur, e).raw);
+    }
     const timeLabel =
       cfg.timeLimitSec != null
         ? startTime === null
@@ -417,7 +455,11 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         c(ansi.gray, `  │  ${cfg.modeLabel}  │  ⏱ ${timeLabel}  │  `) +
         c(ansi.yellow, `${s.wpm.toFixed(0)} wpm`) +
         c(ansi.gray, "  │  ") +
-        c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}% acc`),
+        c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}% acc`) +
+        c(ansi.gray, "  │  ") +
+        (burstReady ? c(ansi.magenta, `⚡${burst.toFixed(0)}`) : c(ansi.gray, "⚡—")) +
+        c(ansi.gray, "  │  ") +
+        (liveCons != null ? c(ansi.white, `${liveCons.toFixed(0)}% cons`) : c(ansi.gray, "— cons")),
     );
     lines.push(c(ansi.gray, bar));
     lines.push("");
