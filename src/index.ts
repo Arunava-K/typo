@@ -37,7 +37,9 @@ ${c(ansi.bold, "Modifiers:")}
   --numbers          include numbers (words/time modes)
 
 ${c(ansi.bold, "Other:")}
-  --history          show past results + best/average
+  --history          show past results, PBs, averages & activity
+  --history --mode <m>   filter history by mode, e.g. "time" (repeatable)
+  --history --last <n>   show last n runs (default 10)
   --replay           replay your last run keystroke-by-keystroke
   --debug-keys       press keys to see their codes (diagnose shortcuts)
   -h, --help         show this help
@@ -59,7 +61,7 @@ ${c(ansi.bold, "Examples:")}
 `);
 }
 
-function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean; replay: boolean } {
+function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean; replay: boolean; historyModes: string[]; historyLast: number | null } {
   const mode: Mode = {
     kind: "time",
     timeSec: 30,
@@ -74,6 +76,8 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   let version = false;
   let debugKeys = false;
   let replay = false;
+  const historyModes: string[] = [];
+  let historyLast: number | null = null;
   let modeSet = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -149,6 +153,20 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.numbers = true;
     } else if (a === "--history" || a === "--stats") {
       history = true;
+    } else if (a === "--mode" || a === "-m") {
+      const v = argv[++i];
+      if (!v) {
+        console.error("Missing value for --mode (e.g. --history --mode \"time 30s\")");
+        process.exit(1);
+      }
+      historyModes.push(v);
+    } else if (a === "--last" || a === "-n") {
+      const v = Number(argv[++i]);
+      if (!Number.isInteger(v) || v < 1 || v > 500) {
+        console.error(`Invalid --last value: ${argv[i]} (use 1–500)`);
+        process.exit(1);
+      }
+      historyLast = v;
     } else if (a === "--replay") {
       replay = true;
     } else if (a === "--debug-keys") {
@@ -163,7 +181,11 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     }
   }
   void modeSet;
-  return { mode, history, help, version, debugKeys, replay };
+  if ((historyModes.length > 0 || historyLast != null) && !history) {
+    console.error("--mode and --last need --history (e.g. typo --history --mode quote)");
+    process.exit(1);
+  }
+  return { mode, history, help, version, debugKeys, replay, historyModes, historyLast };
 }
 
 async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null }> {
@@ -281,7 +303,7 @@ async function main(): Promise<void> {
     await menuLoop();
     return;
   }
-  const { mode, history, help, version, debugKeys, replay } = parseArgs(args);
+  const { mode, history, help, version, debugKeys, replay, historyModes, historyLast } = parseArgs(args);
   if (help) {
     printHelp();
     return;
@@ -296,7 +318,7 @@ async function main(): Promise<void> {
   }
   if (history) {
     const hist = await loadHistory();
-    console.log(summarize(hist));
+    console.log(summarize(hist, { modes: historyModes, last: historyLast ?? 10 }));
     return;
   }
   if (replay) {

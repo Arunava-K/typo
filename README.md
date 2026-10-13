@@ -36,6 +36,8 @@ custom file, or history, all without memorizing flags.
 | `-p, --punctuation` | Add punctuation + capitals (words/time modes) |
 | `--numbers` | Add numbers (words/time modes) |
 | `--history` | Show past results, per-mode PBs & averages |
+| `--history --mode <m>` | Filter history by mode, e.g. `"time"` (repeatable) |
+| `--history --last <n>` | Show last n runs (default 10) |
 | `--replay` | Replay your last run keystroke-by-keystroke |
 | `--debug-keys` | Show key codes to diagnose shortcuts |
 | `-h, --help` | Help |

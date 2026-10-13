@@ -144,20 +144,113 @@ export function pbMatrix(hist: HistoryEntry[]): ModeBest[] {
     .sort((a, b) => cmpMode(a.mode, b.mode));
 }
 
-export function summarize(hist: HistoryEntry[]): string {
+// --- History insights (Task #7): filters, averages, totals, activity ---
+
+export interface HistoryFilter {
+  /** case-insensitive substrings; a row matches if ANY matches its mode */
+  modes?: string[];
+  /** table rows to show (default 10) */
+  last?: number;
+  /** reference time for the activity heatmap (default Date.now) */
+  now?: number;
+}
+
+/** Filter rows by mode substrings (case-insensitive, match-any). */
+export function filterHistory(hist: HistoryEntry[], modes?: string[]): HistoryEntry[] {
+  if (!modes || modes.length === 0) return hist;
+  const needles = modes.map((m) => m.toLowerCase());
+  return hist.filter((h) => needles.some((n) => h.mode.toLowerCase().includes(n)));
+}
+
+/** Mean WPM/acc/cons over the last `n` rows (cons over rows that have it). */
+export function lastNAvg(
+  hist: HistoryEntry[],
+  n = 10,
+): { runs: number; wpm: number; acc: number; cons: number } {
+  const rows = hist.slice(-Math.max(1, n));
+  const wpm = rows.reduce((a, h) => a + h.wpm, 0) / rows.length;
+  const acc = rows.reduce((a, h) => a + h.acc, 0) / rows.length;
+  const conss = rows.map((h) => h.consistency ?? NaN).filter((x) => Number.isFinite(x));
+  const cons = conss.length > 0 ? conss.reduce((a, b) => a + b, 0) / conss.length : NaN;
+  return { runs: rows.length, wpm, acc, cons };
+}
+
+/** Totals: tests, seconds typed, words (correctChars / 5). */
+export function totals(hist: HistoryEntry[]): { tests: number; seconds: number; words: number } {
+  return {
+    tests: hist.length,
+    seconds: hist.reduce((a, h) => a + (Number.isFinite(h.durationSec) ? h.durationSec : 0), 0),
+    words: Math.round(hist.reduce((a, h) => a + (Number.isFinite(h.correctChars) ? h.correctChars : 0), 0) / 5),
+  };
+}
+
+/** Compact duration: 45s / 12m / 1.5h. */
+export function fmtDuration(sec: number): string {
+  if (sec < 60) return `${Math.round(sec)}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  return `${(sec / 3600).toFixed(1)}h`;
+}
+
+/** Per-day run counts for the last `days` UTC days, oldest → today. */
+export function activityCells(hist: HistoryEntry[], days = 14, now = Date.now()): number[] {
+  const counts = new Array<number>(days).fill(0);
+  const dayMs = 86400000;
+  const today = Math.floor(now / dayMs);
+  for (const h of hist) {
+    const t = Date.parse(h.date);
+    if (!Number.isFinite(t)) continue;
+    const ago = today - Math.floor(t / dayMs);
+    if (ago >= 0 && ago < days) counts[days - 1 - ago]++;
+  }
+  return counts;
+}
+
+/** Spark-bar for activity cells: idle days render as ·, busiest as █. */
+export function activityBar(counts: number[]): string {
+  const blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+  const max = Math.max(...counts, 1);
+  return counts
+    .map((c) => {
+      if (c <= 0) return "·";
+      return blocks[Math.min(blocks.length - 1, Math.ceil((c / max) * blocks.length) - 1)]!;
+    })
+    .join("");
+}
+
+export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): string {
   if (hist.length === 0) return "No history yet. Run `typo` to record your first test.";
-  const wpms = hist.map((h) => h.wpm);
+  const rows = filterHistory(hist, filter.modes);
+  if (rows.length === 0) {
+    const available = [...new Set(hist.map((h) => h.mode))].join(", ");
+    return `No runs match filter: ${(filter.modes ?? []).join(", ")}\nAvailable modes: ${available}`;
+  }
+  const lastN = Math.min(Math.max(1, Math.floor(filter.last ?? 10)), 500);
+  const wpms = rows.map((h) => h.wpm);
   const best = Math.max(...wpms);
   const avg = wpms.reduce((a, b) => a + b, 0) / wpms.length;
-  const conss = hist.map((h) => h.consistency ?? NaN).filter((x) => Number.isFinite(x));
+  const conss = rows.map((h) => h.consistency ?? NaN).filter((x) => Number.isFinite(x));
   const avgCons = conss.length > 0 ? conss.reduce((a, b) => a + b, 0) / conss.length : NaN;
-  const recent = hist.slice(-10).reverse();
+  const recent = rows.slice(-lastN).reverse();
+  const last10 = lastNAvg(rows, 10);
+  const tot = totals(rows);
+  const cells = activityCells(rows, 14, filter.now ?? Date.now());
+  const activeDays = cells.filter((c) => c > 0).length;
   const lines: string[] = [];
+  if (filter.modes && filter.modes.length > 0) {
+    lines.push(`Filter: ${filter.modes.join(", ")} (${rows.length} run${rows.length === 1 ? "" : "s"})`);
+  }
   lines.push(
-    `Tests: ${hist.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm` +
+    `Tests: ${rows.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm` +
       (Number.isFinite(avgCons) ? `   Cons: ${avgCons.toFixed(1)}%` : ""),
   );
-  const pbs = pbMatrix(hist);
+  lines.push(
+    `Last ${last10.runs}: ${last10.wpm.toFixed(1)} wpm   ${last10.acc.toFixed(1)}% acc` +
+      (Number.isFinite(last10.cons) ? `   ${last10.cons.toFixed(1)}% cons` : ""),
+  );
+  lines.push(
+    `Total: ${fmtDuration(tot.seconds)} typing   ${tot.words.toLocaleString("en-US")} words   Activity 14d: ${activityBar(cells)} (${activeDays}/14 days)`,
+  );
+  const pbs = pbMatrix(rows);
   lines.push(`PBs (${pbs.length} mode${pbs.length === 1 ? "" : "s"}):`);
   for (const p of pbs) {
     lines.push(
