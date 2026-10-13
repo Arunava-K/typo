@@ -1,0 +1,21 @@
+{
+  "name": "typo",
+  "version": "0.1.0",
+  "description": "CLI typing practice & speed test — like Monkeytype/10fastfingers for the terminal",
+  "type": "module",
+  "bin": {
+    "typo": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && node dist/index.js",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["typing", "wpm", "cli", "practice", "speed-test"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.2"
+  }
+}
