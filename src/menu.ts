@@ -1,7 +1,20 @@
 import { promises as fs } from "node:fs";
 import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
 import { buildBox, composeScreen, deleteLastWord, enterFullscreen, isWordDeleteKey, leaveFullscreen } from "./engine.js";
-import { loadHistory, summarize } from "./history.js";
+import {
+  activityBar,
+  activityCells,
+  fmtDuration,
+  histBar,
+  lastNAvg,
+  loadHistory,
+  pbMatrix,
+  totals,
+  wpmHistogram,
+  type HistoryEntry,
+} from "./history.js";
+import { badges, streaks, totalXp, xpProgress } from "./progression.js";
+import { sparkline } from "./stats.js";
 
 export interface MenuConfig {
   mode: "time" | "words" | "quote" | "custom" | "daily";
@@ -27,6 +40,198 @@ type ModeName = (typeof MODES)[number];
  */
 function centerBlock(lines: string[], width: number): string[] {
   return lines.map((l) => (l.length === 0 ? "" : padCenter(l, width)));
+}
+
+/**
+ * ANSI-aware truncate to `width` visible columns (assumes single-width glyphs).
+ */
+function truncateVisible(s: string, width: number): string {
+  if (stripAnsi(s).length <= width) return s;
+  let out = "";
+  let vis = 0;
+  for (let i = 0; i < s.length; ) {
+    const m = /^\x1b\[[0-9;]*m/.exec(s.slice(i, i + 12));
+    if (m) {
+      out += m[0];
+      i += m[0].length;
+      continue;
+    }
+    if (vis >= width) break;
+    out += s[i];
+    vis++;
+    i++;
+  }
+  return out + ansi.reset;
+}
+
+/** Rounded box with the section name set into its top border. */
+function buildTitledBox(title: string, lines: string[], innerW: number): string[] {
+  const titleLen = stripAnsi(title).length;
+  const fill = Math.max(0, innerW - titleLen - 1);
+  const out = [
+    c(ansi.cyan, "╭─ ") + c(ansi.bold + ansi.cyan, title) + " " + c(ansi.cyan, "─".repeat(fill) + "╮"),
+  ];
+  for (const ln of lines) {
+    const vis = stripAnsi(ln).length;
+    const body = vis > innerW ? truncateVisible(ln, innerW) : ln;
+    out.push(
+      c(ansi.cyan, "│") +
+        "  " +
+        body +
+        " ".repeat(Math.max(0, innerW - Math.min(vis, innerW))) +
+        "  " +
+        c(ansi.cyan, "│"),
+    );
+  }
+  out.push(c(ansi.cyan, "╰" + "─".repeat(innerW + 2) + "╯"));
+  return out;
+}
+
+interface HistCard {
+  title: string;
+  lines: string[];
+}
+
+const HIST_LABEL_W = 7;
+
+/** `label` in gray, padded to a fixed column so values line up. */
+function metric(label: string, value: string): string {
+  return c(ansi.gray, label.padEnd(HIST_LABEL_W)) + value;
+}
+
+/** A `metric` padded to `width` visible columns (0 = no padding). */
+function seg(label: string, value: string, width: number): string {
+  const s = metric(label, value);
+  return s + " ".repeat(Math.max(0, width - stripAnsi(s).length));
+}
+
+/** Structured, colored cards for the interactive history screen. */
+function buildHistoryCards(hist: HistoryEntry[], recentRows: number): HistCard[] {
+  const now = Date.now();
+  const cards: HistCard[] = [];
+  const num = (v: string) => c(ansi.bold + ansi.white, v);
+  const yel = (v: string) => c(ansi.bold + ansi.yellow, v);
+  const gry = (v: string) => c(ansi.gray, v);
+
+  const wpms = hist.map((h) => h.wpm);
+  const best = Math.max(...wpms);
+  const avg = wpms.reduce((a, b) => a + b, 0) / wpms.length;
+  const conss = hist.map((h) => h.consistency ?? NaN).filter((x) => Number.isFinite(x));
+  const avgCons = conss.length > 0 ? conss.reduce((a, b) => a + b, 0) / conss.length : NaN;
+  const last10 = lastNAvg(hist, 10);
+  const tot = totals(hist);
+  const cells = activityCells(hist, 14, now);
+  const activeDays = cells.filter((x) => x > 0).length;
+
+  cards.push({
+    title: "overview",
+    lines: [
+      seg("tests", num(String(hist.length)), 20) + seg("avg", num(`${avg.toFixed(1)} wpm`), 0),
+      seg("best", yel(`${best.toFixed(1)} wpm`), 20) +
+        seg("cons", num(Number.isFinite(avgCons) ? `${avgCons.toFixed(1)}%` : "—"), 0),
+      seg("total", num(fmtDuration(tot.seconds)) + gry(" typing"), 20) +
+        seg("words", num(tot.words.toLocaleString("en-US")), 0),
+      seg(`last${last10.runs}`, num(`${last10.wpm.toFixed(1)} wpm`), 20) +
+        seg("acc", num(`${last10.acc.toFixed(1)}%`), 0) +
+        (Number.isFinite(last10.cons) ? gry("   ") + num(`${last10.cons.toFixed(1)}%`) + gry(" cons") : ""),
+    ],
+  });
+
+  const xp = totalXp(hist);
+  const prog = xpProgress(xp);
+  const st = streaks(hist, now);
+  const bd = badges(hist, now);
+  const earned = bd.filter((b) => b.earned);
+  const badgeStr =
+    earned.length > 0 ? earned.map((b) => c(ansi.cyan, b.name)).join(gry(" · ")) : gry("—");
+  cards.push({
+    title: "progression",
+    lines: [
+      seg(
+        "level",
+        num(String(prog.level)) +
+          gry(`   ${xp.toLocaleString("en-US")} XP · ${(prog.need - prog.into).toLocaleString("en-US")} to L${prog.level + 1}`),
+        0,
+      ),
+      seg("streak", num(st.current > 0 ? `${st.current} day${st.current === 1 ? "" : "s"}` : "—") + gry(`   best ${st.best}`), 0),
+      seg(
+        "badges",
+        num(`${earned.length}/${bd.length}`) +
+          gry("   ") +
+          badgeStr +
+          (earned.length < bd.length ? gry(`   (+${bd.length - earned.length} locked)`) : ""),
+        0,
+      ),
+    ],
+  });
+
+  cards.push({
+    title: "activity",
+    lines: [
+      seg("14d", c(ansi.cyan, activityBar(cells)) + gry(`   ${activeDays}/14 days`), 0),
+      seg("trend", c(ansi.cyan, sparkline(wpms, 40) || "—") + gry("   wpm"), 0),
+    ],
+  });
+
+  const bins = wpmHistogram(wpms, 6);
+  const maxBin = Math.max(...bins.map((b) => b.count), 1);
+  cards.push({
+    title: "distribution",
+    lines: bins.map(
+      (b) =>
+        gry(`${b.lo.toFixed(0)}-${b.hi.toFixed(0)}`.padEnd(7)) +
+        c(ansi.magenta, histBar(b.count, maxBin).padEnd(20)) +
+        gry(` ${b.count}`),
+    ),
+  });
+
+  const pbs = pbMatrix(hist);
+  cards.push({
+    title: "best per mode",
+    lines: pbs.map(
+      (p) =>
+        c(ansi.white, p.mode.padEnd(11)) +
+        yel(p.wpm.toFixed(1).padStart(5)) +
+        gry(" wpm   ") +
+        num(`${p.acc.toFixed(1)}%`) +
+        gry(`   x${p.runs}   ${p.date.slice(0, 10)}`),
+    ),
+  });
+
+  const recent = hist.slice(-recentRows).reverse();
+  const header =
+    gry("date".padEnd(16)) +
+    "  " +
+    gry("mode".padEnd(10)) +
+    " " +
+    gry("wpm".padStart(5)) +
+    " " +
+    gry("raw".padStart(5)) +
+    "  " +
+    gry("acc".padStart(6)) +
+    " " +
+    gry("cons".padStart(5));
+  const recentLines = [header, gry("─".repeat(stripAnsi(header).length))];
+  for (const h of recent) {
+    const d = h.date.slice(0, 16).replace("T", " ");
+    const cons = h.consistency != null ? `${h.consistency.toFixed(1)}%`.padStart(5) : "    —";
+    recentLines.push(
+      gry(d) +
+        "  " +
+        c(ansi.white, h.mode.padEnd(10)) +
+        " " +
+        yel(h.wpm.toFixed(1).padStart(5)) +
+        " " +
+        num(h.raw.toFixed(1).padStart(5)) +
+        "  " +
+        num(`${h.acc.toFixed(1)}%`.padStart(6)) +
+        " " +
+        gry(cons),
+    );
+  }
+  cards.push({ title: "recent runs", lines: recentLines });
+
+  return cards;
 }
 
 export type RowId =
@@ -105,7 +310,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
   let editBuf = "";
   let message = "";
   let screen: "menu" | "history" = "menu";
-  let histLines: string[] = [];
+  let histEntries: HistoryEntry[] = [];
 
   function onOff(v: boolean): string {
     return v ? c(ansi.green, "on") : c(ansi.gray, "off");
@@ -164,16 +369,61 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     const contentWidth = Math.min(vpCols, 60);
 
     if (screen === "history") {
-      const maxLines = Math.max(4, vpRows - 10);
-      const inner = histLines.slice(-maxLines);
-      const w = Math.max(1, ...inner.map((l) => stripAnsi(l).length));
-      const content = [
-        padCenter(c(ansi.bold + ansi.cyan, "history"), w),
-        "",
-        ...inner.map((l) => c(ansi.gray, l)),
-      ];
-      const lines = [...buildBox(content), "", c(ansi.gray, "press any key to go back")];
-      stdout.write(composeScreen(centerBlock(lines, contentWidth), vpCols, vpRows, contentWidth));
+      const foot = c(ansi.gray, "press any key to go back");
+      if (histEntries.length === 0) {
+        const w = Math.min(contentWidth, vpCols) - 4;
+        const box = buildTitledBox(
+          "history",
+          [c(ansi.gray, "No history yet — finish a test to start recording.")],
+          w,
+        );
+        const lines = [...box, "", foot];
+        stdout.write(composeScreen(centerBlock(lines, w + 4), vpCols, vpRows, w + 4));
+        return;
+      }
+
+      const availW = Math.max(40, Math.min(vpCols - 4, 92));
+      const maxBody = Math.max(6, vpRows - 2);
+      const heightOf = (cs: HistCard[]): number =>
+        cs.reduce((n, cd) => n + cd.lines.length + 2, 0) + Math.max(0, cs.length - 1);
+
+      // Start with the minimum recent rows, shed whole sections until it fits,
+      // then spend any leftover height on more recent rows.
+      const MIN_RECENT = 3;
+      const MAX_RECENT = 10;
+      let cards = buildHistoryCards(histEntries, MIN_RECENT);
+      const droppable = ["distribution", "best per mode", "activity"];
+      const dropped: string[] = [];
+      while (heightOf(cards) > maxBody) {
+        const drop = droppable.shift();
+        if (!drop) break;
+        cards = cards.filter((cd) => cd.title !== drop);
+        dropped.push(drop);
+      }
+      const room = maxBody - heightOf(cards);
+      const grow = Math.min(room, MAX_RECENT - MIN_RECENT, Math.max(0, histEntries.length - MIN_RECENT));
+      if (grow > 0) {
+        cards = buildHistoryCards(histEntries, MIN_RECENT + grow).filter((cd) => !dropped.includes(cd.title));
+      }
+
+      let innerW = 0;
+      for (const cd of cards) {
+        innerW = Math.max(innerW, cd.title.length + 1);
+        for (const l of cd.lines) innerW = Math.max(innerW, stripAnsi(l).length);
+      }
+      innerW = Math.max(20, Math.min(innerW, availW - 4));
+
+      const lines: string[] = [];
+      cards.forEach((cd, i) => {
+        if (i > 0) lines.push("");
+        lines.push(...buildTitledBox(cd.title, cd.lines, innerW));
+      });
+      lines.push("");
+      if (dropped.length > 0) {
+        lines.push(c(ansi.gray, `+${dropped.length} section${dropped.length === 1 ? "" : "s"} hidden — enlarge the terminal`));
+      }
+      lines.push(foot);
+      stdout.write(composeScreen(centerBlock(lines, innerW + 4), vpCols, vpRows, innerW + 4));
       return;
     }
 
@@ -273,8 +523,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     }
 
     async function openHistory(): Promise<void> {
-      const hist = await loadHistory();
-      histLines = summarize(hist).split("\n");
+      histEntries = await loadHistory();
       screen = "history";
       draw();
     }
