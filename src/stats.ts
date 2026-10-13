@@ -258,3 +258,20 @@ export function worstKeys(
 export function formatKey(k: string): string {
   return k === " " ? "␣" : k;
 }
+
+// --- Mistake log (Task #5) ---
+
+/**
+ * Compare a completed word's expected vs typed text.
+ * Returns null when the word was typed correctly.
+ */
+export function wordMistake(expected: string, actual: string): { word: string; typed: string } | null {
+  if (expected === actual) return null;
+  return { word: expected, typed: actual };
+}
+
+/** Shorten long words for the results mistakes row. */
+export function shortWord(w: string, n = 14): string {
+  if (w.length <= n) return w;
+  return w.slice(0, n - 1) + "…";
+}

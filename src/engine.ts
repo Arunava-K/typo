@@ -7,11 +7,13 @@ import {
   formatKey,
   normalizeKey,
   scoreRun,
+  shortWord,
   sparkline,
+  wordMistake,
   worstKeys,
   type KeyPressEvent,
 } from "./stats.js";
-import { saveResult } from "./history.js";
+import { saveLastReplay, saveResult, type ReplayEvent } from "./history.js";
 
 export interface RunConfig {
   target: string;
@@ -253,7 +255,7 @@ function pendingStyle(t: string, active: boolean): string {
   return active ? c(ansi.white, t) : c(ansi.gray, t);
 }
 
-function renderChar(
+export function renderChar(
   target: string,
   typed: string,
   idx: number,
@@ -365,6 +367,30 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   // Updated in draw() (runs on every keystroke + 4x/sec tick).
   let burstWordStart: number | null = null;
   let burstStartTime: number | null = null;
+  // Word-level mistake log + full keystroke log for replay (Task #5).
+  const mistakes: { start: number; word: string; typed: string }[] = [];
+  const inputLog: ReplayEvent[] = [];
+  function logInput(type: ReplayEvent["type"], text?: string): void {
+    if (startTime === null) return;
+    if (inputLog.length >= 20000) return;
+    const ev: ReplayEvent = { t: Date.now() - startTime, type };
+    if (text != null) ev.text = text;
+    inputLog.push(ev);
+  }
+  // Evaluate one completed word [start, end). Replaces any earlier entry
+  // for the same word (user may backspace, fix it and re-complete).
+  function checkWord(start: number, end: number): void {
+    if (start >= end || end > typed.length) return;
+    const m = wordMistake(target.slice(start, end), typed.slice(start, end));
+    const i = mistakes.findIndex((x) => x.start === start);
+    if (m == null) {
+      if (i !== -1) mistakes.splice(i, 1);
+      return;
+    }
+    const row = { start, word: m.word, typed: m.typed };
+    if (i !== -1) mistakes[i] = row;
+    else if (mistakes.length < 50) mistakes.push(row);
+  }
   function countCorrect(): number {
     let n = 0;
     const m = Math.min(typed.length, target.length);
@@ -540,11 +566,25 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
                 `${w.avgMs > 0 ? c(ansi.gray, ` ${w.avgMs.toFixed(0)}ms`) : ""}`,
               )
               .join(c(ansi.gray, "  "));
+      const shownMistakes = mistakes.slice(0, 4);
+      const mistakeStr =
+        mistakes.length === 0
+          ? c(ansi.gray, "—")
+          : shownMistakes
+              .map(
+                (m) =>
+                  `${c(ansi.red, shortWord(m.typed))}${c(ansi.gray, " → ")}${c(ansi.green, shortWord(m.word))}`,
+              )
+              .join(c(ansi.gray, "   ")) +
+            (mistakes.length > shownMistakes.length
+              ? c(ansi.gray, `   +${mistakes.length - shownMistakes.length} more`)
+              : "");
       const body = [
         `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}   ${c(ansi.gray, "gross " + f.gross.toFixed(1))}`,
         `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}   ${c(ansi.gray, "cons ")}${c(ansi.bold + ansi.white, consistency.toFixed(1) + "%")}`,
         `${c(ansi.gray, "trend".padEnd(6))}${c(ansi.cyan, trend || "—")}`,
         `${c(ansi.gray, "weak".padEnd(6))}${weakStr}`,
+        `${c(ansi.gray, "miss".padEnd(6))}${mistakeStr}`,
         "",
         `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
         `${c(ansi.gray, "cpm".padEnd(6))}${c(ansi.bold + ansi.white, f.cpm.toFixed(0))}   ${c(ansi.gray, "raw " + f.cpmRaw.toFixed(0))}   ${c(ansi.gray, String(f.corrections) + (f.corrections === 1 ? " correction" : " corrections"))}`,
@@ -569,6 +609,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     finishElapsed = startTime === null ? 0 : (Date.now() - startTime) / 1000;
     if (finishElapsed < 0.5) finishElapsed = 0.5;
     snapshot();
+    // Final word has no trailing space — evaluate it explicitly.
+    if (typed.length >= target.length && target.length > 0) {
+      let s = target.length - 1;
+      while (s >= 0 && target[s] !== " ") s--;
+      checkWord(s + 1, target.length);
+    }
     const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
     const finTrace = buildWpmTrace(
       [...samples.map((s) => ({ tSec: s.t, correctChars: s.correct, typedLen: s.typed })),
@@ -596,6 +642,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       gross: Math.round(f.gross * 10) / 10,
       cpm: Math.round(f.cpm),
       corrections: f.corrections,
+      mistakes: mistakes.slice(0, 20).map((m) => ({ word: m.word, typed: m.typed })),
     })
       .then(() => {
         resultSaved = true;
@@ -604,6 +651,15 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       .catch(() => {
         draw();
       });
+    // Keystroke log for `typo --replay` (fire-and-forget; never blocks UI).
+    void saveLastReplay({
+      version: 1,
+      date: new Date().toISOString(),
+      mode: cfg.saveMode,
+      modeLabel: cfg.modeLabel,
+      target,
+      events: inputLog,
+    });
     draw();
   }
 
@@ -649,6 +705,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           if (typed.length > 0) {
             typed = deleteLastWord(typed);
             corrections++;
+            logInput("worddel");
             snapshot();
             lastKeyAt = Date.now();
             lastKeyTime = Date.now();
@@ -663,6 +720,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           if (typed.length > 0) {
             typed = typed.slice(0, -1);
             corrections++;
+            logInput("back");
             snapshot();
             lastKeyAt = Date.now();
             lastKeyTime = Date.now();
@@ -672,7 +730,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         }
         // Ctrl-U: clear all
         if (data === "\x15") {
-          if (typed.length > 0) corrections++;
+          if (typed.length > 0) {
+            corrections++;
+            logInput("clear");
+          }
           typed = "";
           snapshot();
           lastKeyAt = Date.now();
@@ -687,6 +748,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         let added = false;
         const batchAt = Date.now();
         let firstInBatch = true;
+        let appended = "";
         for (const ch of data) {
           const code = ch.codePointAt(0)!;
           if (code < 32 || code === 127) continue; // control
@@ -694,6 +756,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           if (startTime === null) startTime = Date.now();
           const pos = typed.length;
           typed += ch;
+          appended += ch;
           totalKeystrokes++;
           const expected = pos < target.length ? target[pos]! : ch;
           const hit = pos < target.length && ch === target[pos];
@@ -704,8 +767,15 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
           firstInBatch = false;
           added = true;
+          // Word completed: a space typed where the target has a space.
+          if (ch === " " && pos < target.length && target[pos] === " ") {
+            let s = pos - 1;
+            while (s >= 0 && target[s] !== " ") s--;
+            checkWord(s + 1, pos);
+          }
         }
         if (added) {
+          logInput("insert", appended);
           snapshot();
           lastKeyAt = Date.now();
           lastKeyTime = batchAt;

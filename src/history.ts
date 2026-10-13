@@ -16,6 +16,53 @@ export interface HistoryEntry {
   gross?: number; // all-presses WPM incl. deleted chars (Task #4)
   cpm?: number; // correct chars per minute (Task #4)
   corrections?: number; // backspace/word-delete/clear presses (Task #4)
+  mistakes?: { word: string; typed: string }[]; // completed words typed wrong, ≤20 (Task #5)
+}
+
+// --- Session replay (Task #5) ---
+// Full keystroke log of the latest run, kept in its own file so the
+// 500-row history.json stays lean. Overwritten on every finished test.
+
+export interface ReplayEvent {
+  t: number; // ms since first keystroke
+  type: "insert" | "back" | "worddel" | "clear";
+  text?: string; // insert payload (already filtered + capped)
+}
+
+export interface LastReplay {
+  version: 1;
+  date: string; // ISO
+  mode: string;
+  modeLabel: string;
+  target: string;
+  events: ReplayEvent[];
+}
+
+function replayFile(): string {
+  return path.join(dir(), "last-replay.json");
+}
+
+/** Persist the finished run's keystroke log (best-effort, never throws). */
+export async function saveLastReplay(rep: LastReplay): Promise<void> {
+  try {
+    await fs.mkdir(dir(), { recursive: true });
+    await fs.writeFile(replayFile(), JSON.stringify(rep), "utf8");
+  } catch {
+    /* replay is a bonus — a failed write must not break result saving */
+  }
+}
+
+export async function loadLastReplay(): Promise<LastReplay | null> {
+  try {
+    const raw = await fs.readFile(replayFile(), "utf8");
+    const rep = JSON.parse(raw) as LastReplay;
+    if (!rep || rep.version !== 1 || typeof rep.target !== "string" || !Array.isArray(rep.events)) {
+      return null;
+    }
+    return rep;
+  } catch {
+    return null;
+  }
 }
 
 function dir(): string {

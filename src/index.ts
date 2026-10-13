@@ -4,6 +4,7 @@ import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, normalizeCustom } from "./generator.js";
 import { loadHistory, summarize } from "./history.js";
 import { runMenu, type MenuConfig } from "./menu.js";
+import { runReplay } from "./replay.js";
 import { ansi, c } from "./ui.js";
 
 interface Mode {
@@ -37,6 +38,7 @@ ${c(ansi.bold, "Modifiers:")}
 
 ${c(ansi.bold, "Other:")}
   --history          show past results + best/average
+  --replay           replay your last run keystroke-by-keystroke
   --debug-keys       press keys to see their codes (diagnose shortcuts)
   -h, --help         show this help
   --version          show version
@@ -53,10 +55,11 @@ ${c(ansi.bold, "Examples:")}
   typo --words 50           ${c(ansi.gray, "# 50 words")}
   typo --quote              ${c(ansi.gray, "# random quote")}
   typo --custom essay.txt   ${c(ansi.gray, "# custom text from file")}
+  typo --replay             ${c(ansi.gray, "# watch your last run back")}
 `);
 }
 
-function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean } {
+function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean; replay: boolean } {
   const mode: Mode = {
     kind: "time",
     timeSec: 30,
@@ -70,6 +73,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   let help = false;
   let version = false;
   let debugKeys = false;
+  let replay = false;
   let modeSet = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -145,6 +149,8 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.numbers = true;
     } else if (a === "--history" || a === "--stats") {
       history = true;
+    } else if (a === "--replay") {
+      replay = true;
     } else if (a === "--debug-keys") {
       debugKeys = true;
     } else if (a === "--help" || a === "-h") {
@@ -157,7 +163,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     }
   }
   void modeSet;
-  return { mode, history, help, version, debugKeys };
+  return { mode, history, help, version, debugKeys, replay };
 }
 
 async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null }> {
@@ -275,7 +281,7 @@ async function main(): Promise<void> {
     await menuLoop();
     return;
   }
-  const { mode, history, help, version, debugKeys } = parseArgs(args);
+  const { mode, history, help, version, debugKeys, replay } = parseArgs(args);
   if (help) {
     printHelp();
     return;
@@ -291,6 +297,10 @@ async function main(): Promise<void> {
   if (history) {
     const hist = await loadHistory();
     console.log(summarize(hist));
+    return;
+  }
+  if (replay) {
+    await runReplay();
     return;
   }
 
