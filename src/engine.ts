@@ -1,4 +1,4 @@
-import { ansi, c, termHeight, termWidth } from "./ui.js";
+import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
 import { scoreRun } from "./stats.js";
 import { saveResult } from "./history.js";
 
@@ -124,35 +124,81 @@ export function composeScreen(
   return out;
 }
 
+/**
+ * Word under the cursor: [start, end) char range, space-delimited.
+ * A cursor sitting on a space belongs to the next word; past-the-end
+ * (or empty target) yields null. Exported for tests.
+ */
+export function currentWordRange(target: string, pos: number): { start: number; end: number } | null {
+  if (pos >= target.length || target.length === 0) return null;
+  let s = pos;
+  if (target[s] === " ") {
+    while (s < target.length && target[s] === " ") s++;
+    if (s >= target.length) return null;
+  } else {
+    while (s > 0 && target[s - 1] !== " ") s--;
+  }
+  let e = s;
+  while (e < target.length && target[e] !== " ") e++;
+  return { start: s, end: e };
+}
+
+/**
+ * Frame content lines in a rounded box. Widths are measured by visible
+ * characters so ANSI colors don't break alignment. Exported for tests.
+ */
+export function buildBox(content: string[]): string[] {
+  const widths = content.map((l) => stripAnsi(l).length);
+  const inner = widths.length > 0 ? Math.max(...widths) : 0;
+  const bar = "─".repeat(inner + 4);
+  const out = [c(ansi.cyan, `╭${bar}╮`)];
+  for (const ln of content) {
+    out.push(
+      c(ansi.cyan, "│") + "  " + ln + " ".repeat(inner - stripAnsi(ln).length) + "  " + c(ansi.cyan, "│"),
+    );
+  }
+  out.push(c(ansi.cyan, `╰${bar}╯`));
+  return out;
+}
+
+export interface CaretOpts {
+  /** false → caret blinked off, show pending style instead of the block */
+  caret: boolean;
+  /** line already completed → dim it so focus stays on the active line */
+  dim: boolean;
+  /** char belongs to the word under the cursor → brighter pending color */
+  active: boolean;
+}
+
+function pendingStyle(t: string, active: boolean): string {
+  if (t === " ") return " ";
+  return active ? c(ansi.white, t) : c(ansi.gray, t);
+}
+
 function renderChar(
   target: string,
   typed: string,
   idx: number,
   isCursor: boolean,
+  opts: CaretOpts,
 ): string {
   const t = target[idx]!;
   const isTyped = idx < typed.length;
   const correct = isTyped && typed[idx] === t;
   const wrong = isTyped && typed[idx] !== t;
 
-  const display = t === " " ? " " : t;
-
   if (isCursor) {
-    // cursor highlight: inverse, keep semantic color underneath via bold
-    if (wrong) return c(ansi.bgRed + ansi.white, display);
-    if (correct) return c(ansi.inverse + ansi.green, display);
-    // pending cursor: underline + inverse dim
-    if (t === " ") return c(ansi.inverse, display);
-    return c(ansi.inverse, display);
+    if (!opts.caret) return pendingStyle(t, opts.active);
+    if (wrong) return c(ansi.bgRed + ansi.white, t);
+    if (correct) return c(ansi.inverse + ansi.green, t);
+    return c(ansi.inverse, t);
   }
-  if (correct) return c(ansi.green, display);
+  if (correct) return opts.dim ? c(ansi.dim + ansi.green, t) : c(ansi.green, t);
   if (wrong) {
     if (t === " ") return c(ansi.bgRed, " ");
-    return c(ansi.red, display);
+    return c(ansi.red, t);
   }
-  // pending
-  if (t === " ") return display;
-  return c(ansi.gray, display);
+  return pendingStyle(t, opts.active);
 }
 
 /**
@@ -229,6 +275,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let finished = false;
   let finishElapsed = 0;
   let resultSaved = false;
+  let lastKeyAt = 0;
 
   function elapsed(): number {
     if (startTime === null) return 0;
@@ -242,6 +289,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
   function draw() {
     const contentWidth = Math.min(vpCols, 80);
+    // Block caret blinks when idle (~530ms), stays solid while typing.
+    const blinkOn = Date.now() - lastKeyAt < 600 || Math.floor(Date.now() / 530) % 2 === 0;
+    const word = currentWordRange(target, Math.min(typed.length, target.length));
     const e = elapsed();
     const s = liveScore();
     const timeLabel =
@@ -303,7 +353,11 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         const idxs = textLines[li]!;
         let line = "";
         for (const idx of idxs) {
-          line += renderChar(target, typed, idx, idx === typed.length);
+          line += renderChar(target, typed, idx, idx === typed.length, {
+            caret: blinkOn,
+            dim: li < cursorLine,
+            active: word != null && idx >= word.start && idx < word.end,
+          });
         }
         // cursor past end of text
         if (typed.length >= target.length && li === textLines.length - 1) {
@@ -320,24 +374,23 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       lines.push("");
       lines.push(c(ansi.gray, "esc quit   ·   ctrl+w delete word   ·   backspace fix"));
     } else {
-      // results
+      // results — framed panel
       const f = scoreRun(target, typed, finishElapsed);
-      lines.push(c(ansi.bold + ansi.green, "done!"));
-      lines.push("");
-      lines.push(
-        `${c(ansi.gray, "wpm")}   ${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1).padStart(6))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
-      );
-      lines.push(`  ${c(ansi.gray, "acc")}   ${c(ansi.bold + ansi.white, f.acc.toFixed(1).padStart(6) + "%")}`);
-      lines.push("");
-      lines.push(
-        `  ${c(ansi.gray, "chars")}  ${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
-      );
-      lines.push(`  ${c(ansi.gray, "time")}   ${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`);
-      if (resultSaved) lines.push(`  ${c(ansi.gray, "saved to ~/.typo/history.json")}`);
-      lines.push("");
-      lines.push(
+      const body = [
+        `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
+        `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}`,
+        "",
+        `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
+        `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
+      ];
+      if (resultSaved) body.push(c(ansi.gray, "saved to ~/.typo/history.json"));
+      body.push("");
+      body.push(
         c(ansi.cyan, "[r]") + c(ansi.gray, " retry   ") + c(ansi.cyan, "[tab/n]") + c(ansi.gray, " next   ") + c(ansi.cyan, "[q/esc]") + c(ansi.gray, " quit"),
       );
+      const innerW = Math.max(...body.map((l) => stripAnsi(l).length));
+      body.unshift(padCenter(c(ansi.bold + ansi.green, "done!"), innerW));
+      for (const bl of buildBox(body)) lines.push(bl);
     }
 
     stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
@@ -415,6 +468,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
             while (end > 0 && typed[end - 1] !== " ") end--;
             // remove from end..typed.length, adjust keystroke counts approx (don't rewrite history)
             typed = typed.slice(0, end);
+            lastKeyAt = Date.now();
             draw();
           }
           return;
@@ -423,6 +477,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (data === "\x7f" || data === "\x08") {
           if (typed.length > 0) {
             typed = typed.slice(0, -1);
+            lastKeyAt = Date.now();
             draw();
           }
           return;
@@ -430,6 +485,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         // Ctrl-U: clear all
         if (data === "\x15") {
           typed = "";
+          lastKeyAt = Date.now();
           draw();
           return;
         }
@@ -452,6 +508,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         void correctKeystrokes;
         void totalKeystrokes;
         if (added) {
+          lastKeyAt = Date.now();
           draw();
           checkEnd();
         }

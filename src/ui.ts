@@ -38,3 +38,17 @@ export function padRight(s: string, n: number): string {
   if (s.length >= n) return s;
   return s + " ".repeat(n - s.length);
 }
+
+/** Visible length of a string that may contain ANSI color codes. */
+export function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+/** Center text (by visible width) in a field of `width` columns. */
+export function padCenter(text: string, width: number): string {
+  const len = stripAnsi(text).length;
+  if (len >= width) return text;
+  const left = Math.floor((width - len) / 2);
+  return " ".repeat(left) + text + " ".repeat(width - len - left);
+}
