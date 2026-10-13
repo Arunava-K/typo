@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { sparkline } from "./stats.js";
 
 export interface HistoryEntry {
   date: string; // ISO
@@ -217,6 +218,32 @@ export function activityBar(counts: number[]): string {
     .join("");
 }
 
+// --- History graphs (Task #8) ---
+
+/** Equal-width WPM histogram bins (pure, unit-testable). */
+export function wpmHistogram(values: number[], binCount = 8): { lo: number; hi: number; count: number }[] {
+  const xs = values.filter((v) => Number.isFinite(v));
+  if (xs.length === 0) return [];
+  let min = Math.min(...xs);
+  let max = Math.max(...xs);
+  if (max <= min) return [{ lo: Math.floor(min), hi: Math.floor(min) + 1, count: xs.length }];
+  min = Math.floor(min);
+  max = Math.ceil(max);
+  const bins = Math.max(1, Math.min(binCount, Math.ceil(max - min)));
+  const width = (max - min) / bins;
+  const counts = new Array<number>(bins).fill(0);
+  for (const v of xs) {
+    counts[Math.min(bins - 1, Math.floor((v - min) / width))]++;
+  }
+  return counts.map((count, i) => ({ lo: min + i * width, hi: min + (i + 1) * width, count }));
+}
+
+/** Scaled bar for one histogram bin (at least 1 block when count > 0). */
+export function histBar(count: number, max: number, width = 20): string {
+  if (count <= 0 || max <= 0) return "";
+  return "█".repeat(Math.max(1, Math.round((count / max) * width)));
+}
+
 export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): string {
   if (hist.length === 0) return "No history yet. Run `typo` to record your first test.";
   const rows = filterHistory(hist, filter.modes);
@@ -250,6 +277,15 @@ export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): str
   lines.push(
     `Total: ${fmtDuration(tot.seconds)} typing   ${tot.words.toLocaleString("en-US")} words   Activity 14d: ${activityBar(cells)} (${activeDays}/14 days)`,
   );
+  lines.push(`Trend (wpm, oldest → newest): ${sparkline(rows.map((h) => h.wpm), 40)}`);
+  const bins = wpmHistogram(rows.map((h) => h.wpm));
+  const maxBin = Math.max(...bins.map((b) => b.count), 1);
+  lines.push(`Histogram (${rows.length} run${rows.length === 1 ? "" : "s"}):`);
+  for (const b of bins) {
+    lines.push(
+      `  ${`${b.lo.toFixed(0)}-${b.hi.toFixed(0)}`.padEnd(9)} ${histBar(b.count, maxBin).padEnd(20)} ${b.count}`,
+    );
+  }
   const pbs = pbMatrix(rows);
   lines.push(`PBs (${pbs.length} mode${pbs.length === 1 ? "" : "s"}):`);
   for (const p of pbs) {
