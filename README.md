@@ -22,6 +22,10 @@ node dist/index.js --time 30
 typo [options]
 ```
 
+Just `typo` with no options opens the interactive setup menu —
+pick mode, duration (15s–240s), word count, punctuation/numbers,
+custom file, or history, all without memorizing flags.
+
 | Option | Description |
 |---|---|
 | `--time <sec>` | Timed test, e.g. `--time 15/30/60/120` (default: 30) |
@@ -38,7 +42,8 @@ typo [options]
 ### Examples
 
 ```bash
-typo                    # 30s test
+typo                    # interactive setup menu
+typo --time 120         # 120s test (any 1–600s works)
 typo --time 60 -p       # 60s with punctuation
 typo --words 50         # 50 words
 typo --quote            # random quote

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, normalizeCustom } from "./generator.js";
 import { loadHistory, summarize } from "./history.js";
+import { runMenu, type MenuConfig } from "./menu.js";
 import { ansi, c } from "./ui.js";
 
 interface Mode {
@@ -20,7 +21,8 @@ function printHelp(): void {
 ${c(ansi.gray, "like Monkeytype / 10fastfingers, but in your terminal.")}
 
 ${c(ansi.bold, "Usage:")}
-  typo [options]
+  typo                open the interactive setup menu (no flags needed)
+  typo [options]      jump straight into a test
 
 ${c(ansi.bold, "Modes:")} ${c(ansi.gray, "(default: --time 30)")}
   --time <sec>       timed test (e.g. 15, 30, 60, 120)
@@ -187,8 +189,55 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
   return { text, label: "custom", saveMode: "custom", timeLimit: null };
 }
 
+async function menuLoop(): Promise<void> {
+  // Remembers your last setup between tests.
+  const remembered: MenuConfig = {
+    mode: "time",
+    timeSec: 30,
+    wordCount: 50,
+    punctuation: false,
+    numbers: false,
+    customFile: "",
+  };
+  for (;;) {
+    const m = await runMenu(remembered);
+    if (m.kind === "quit") {
+      console.log(c(ansi.gray, "Thanks for practicing. Type fast, stay calm."));
+      break;
+    }
+    Object.assign(remembered, m.config);
+    const mode: Mode = {
+      kind: m.config.mode,
+      timeSec: m.config.timeSec,
+      wordCount: m.config.wordCount,
+      customText: null,
+      customFile: m.config.customFile || null,
+      punctuation: m.config.punctuation,
+      numbers: m.config.numbers,
+    };
+    // Test loop: quitting a result returns to the menu.
+    for (;;) {
+      const t = await buildTarget(mode);
+      const cfg: RunConfig = {
+        target: t.text,
+        modeLabel: t.label,
+        timeLimitSec: t.timeLimit,
+        saveMode: t.saveMode,
+      };
+      const action = await runTest(cfg);
+      if (action === "quit") break;
+    }
+  }
+}
+
 async function main(): Promise<void> {
-  const { mode, history, help, version } = parseArgs(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  // No flags → interactive setup menu.
+  if (args.length === 0) {
+    await menuLoop();
+    return;
+  }
+  const { mode, history, help, version } = parseArgs(args);
   if (help) {
     printHelp();
     return;
