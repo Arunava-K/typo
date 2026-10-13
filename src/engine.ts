@@ -187,6 +187,20 @@ export function isWordDeleteKey(data: string): boolean {
     const c1 = data.charCodeAt(1);
     return c1 === 127 || c1 === 8;
   }
+  // CSI 3 ; 5 ~ (Ctrl+Delete) and CSI 3 ; 3 ~ (Alt+Delete): with the
+  // cursor pinned to the end of input there is nothing ahead to delete,
+  // so treat the intent as a word delete as well.
+  if (
+    data.length === 6 &&
+    data.charCodeAt(0) === 27 &&
+    data.charCodeAt(1) === 91 &&
+    data.charCodeAt(2) === 51 &&
+    data.charCodeAt(3) === 59 &&
+    (data.charCodeAt(4) === 53 || data.charCodeAt(4) === 51) &&
+    data.charCodeAt(5) === 126
+  ) {
+    return true;
+  }
   return false;
 }
 

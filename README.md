@@ -36,6 +36,7 @@ custom file, or history, all without memorizing flags.
 | `-p, --punctuation` | Add punctuation + capitals (words/time modes) |
 | `--numbers` | Add numbers (words/time modes) |
 | `--history` | Show past results, best & average |
+| `--debug-keys` | Show key codes to diagnose shortcuts |
 | `-h, --help` | Help |
 | `--version` | Version |
 
@@ -58,6 +59,12 @@ typo --history          # past scores
 
 Live HUD shows countdown (or elapsed), live WPM and accuracy. Results show WPM, raw WPM, accuracy, char breakdown, and are saved to `~/.typo/history.json`.
 
-## How WPM is calculated
+### Shortcut not working?
 
+Terminals disagree on what combos like Ctrl+Backspace send. Run
+`typo --debug-keys`, press the combo, and check the `wordDelete=yes`
+verdict. If it says `no`, paste the `bytes [...]` line in an issue and
+we will add your terminal's sequence.
+
+## How WPM is calculated
 Standard formula: `(correct characters / 5) / minutes`. Raw WPM counts every typed character. Accuracy = correct keystrokes / total keystrokes.

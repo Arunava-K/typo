@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { promises as fs } from "node:fs";
-import { runTest, type RunConfig } from "./engine.js";
+import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, normalizeCustom } from "./generator.js";
 import { loadHistory, summarize } from "./history.js";
 import { runMenu, type MenuConfig } from "./menu.js";
@@ -37,6 +37,7 @@ ${c(ansi.bold, "Modifiers:")}
 
 ${c(ansi.bold, "Other:")}
   --history          show past results + best/average
+  --debug-keys       press keys to see their codes (diagnose shortcuts)
   -h, --help         show this help
   --version          show version
 
@@ -55,7 +56,7 @@ ${c(ansi.bold, "Examples:")}
 `);
 }
 
-function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean } {
+function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolean; version: boolean; debugKeys: boolean } {
   const mode: Mode = {
     kind: "time",
     timeSec: 30,
@@ -68,6 +69,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   let history = false;
   let help = false;
   let version = false;
+  let debugKeys = false;
   let modeSet = false;
 
   for (let i = 0; i < argv.length; i++) {
@@ -143,6 +145,8 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.numbers = true;
     } else if (a === "--history" || a === "--stats") {
       history = true;
+    } else if (a === "--debug-keys") {
+      debugKeys = true;
     } else if (a === "--help" || a === "-h") {
       help = true;
     } else if (a === "--version" || a === "-v") {
@@ -153,7 +157,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     }
   }
   void modeSet;
-  return { mode, history, help, version };
+  return { mode, history, help, version, debugKeys };
 }
 
 async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null }> {
@@ -230,6 +234,40 @@ async function menuLoop(): Promise<void> {
   }
 }
 
+async function runDebugKeys(): Promise<void> {
+  if (!process.stdin.isTTY) {
+    console.error("typo --debug-keys needs an interactive terminal (TTY).");
+    process.exit(1);
+  }
+  console.log("Press keys to see their codes (ESC alone or Ctrl+C exits).");
+  console.log("wordDelete=yes means the combo deletes a whole word in typo.");
+  console.log("");
+  const stdin = process.stdin;
+  stdin.setEncoding("utf8");
+  try {
+    stdin.setRawMode(true);
+  } catch { /* noop */ }
+  stdin.resume();
+  await new Promise<void>((resolve) => {
+    const onData = (chunk: Buffer): void => {
+      const data = chunk.toString("utf8");
+      const codes = Array.from(data)
+        .map((ch) => String(ch.codePointAt(0)))
+        .join(" ");
+      console.log("  bytes [" + codes + "]  wordDelete=" + (isWordDeleteKey(data) ? "yes" : "no"));
+      if (data.length === 1 && (data.charCodeAt(0) === 27 || data.charCodeAt(0) === 3)) {
+        stdin.off("data", onData);
+        try {
+          stdin.setRawMode(false);
+        } catch { /* noop */ }
+        stdin.pause();
+        resolve();
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   // No flags → interactive setup menu.
@@ -237,13 +275,17 @@ async function main(): Promise<void> {
     await menuLoop();
     return;
   }
-  const { mode, history, help, version } = parseArgs(args);
+  const { mode, history, help, version, debugKeys } = parseArgs(args);
   if (help) {
     printHelp();
     return;
   }
   if (version) {
     console.log("typo 0.1.0");
+    return;
+  }
+  if (debugKeys) {
+    await runDebugKeys();
     return;
   }
   if (history) {
