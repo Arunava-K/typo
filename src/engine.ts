@@ -1,5 +1,5 @@
 import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
-import { scoreRun } from "./stats.js";
+import { buildWpmTrace, calcConsistency, scoreRun, sparkline } from "./stats.js";
 import { saveResult } from "./history.js";
 
 export interface RunConfig {
@@ -344,6 +344,23 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let resultSaved = false;
   let lastKeyAt = 0;
 
+  // Per-keystroke timeline for WPM trace + consistency (Task #1).
+  const samples: { t: number; correct: number; typed: number }[] = [];
+  function countCorrect(): number {
+    let n = 0;
+    const m = Math.min(typed.length, target.length);
+    for (let i = 0; i < m; i++) if (typed[i] === target[i]) n++;
+    return n;
+  }
+  function snapshot(): void {
+    if (startTime === null) return;
+    samples.push({
+      t: (Date.now() - startTime) / 1000,
+      correct: countCorrect(),
+      typed: typed.length,
+    });
+  }
+
   function elapsed(): number {
     if (startTime === null) return 0;
     if (finished) return finishElapsed;
@@ -443,9 +460,23 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     } else {
       // results — framed panel
       const f = scoreRun(target, typed, finishElapsed);
+      const traceSamples = samples.map((s) => ({
+        tSec: s.t,
+        correctChars: s.correct,
+        typedLen: s.typed,
+      }));
+      traceSamples.push({
+        tSec: finishElapsed,
+        correctChars: f.correctChars,
+        typedLen: typed.length,
+      });
+      const trace = buildWpmTrace(traceSamples, finishElapsed);
+      const consistency = calcConsistency(trace.raw);
+      const trend = sparkline(trace.wpm, 30);
       const body = [
         `${c(ansi.gray, "wpm".padEnd(6))}${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
-        `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}`,
+        `${c(ansi.gray, "acc".padEnd(6))}${c(ansi.bold + ansi.white, f.acc.toFixed(1) + "%")}   ${c(ansi.gray, "cons ")}${c(ansi.bold + ansi.white, consistency.toFixed(1) + "%")}`,
+        `${c(ansi.gray, "trend".padEnd(6))}${c(ansi.cyan, trend || "—")}`,
         "",
         `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
@@ -468,7 +499,14 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     finished = true;
     finishElapsed = startTime === null ? 0 : (Date.now() - startTime) / 1000;
     if (finishElapsed < 0.5) finishElapsed = 0.5;
+    snapshot();
     const f = scoreRun(target, typed, finishElapsed);
+    const finTrace = buildWpmTrace(
+      [...samples.map((s) => ({ tSec: s.t, correctChars: s.correct, typedLen: s.typed })),
+        { tSec: finishElapsed, correctChars: f.correctChars, typedLen: typed.length }],
+      finishElapsed,
+    );
+    const finConsistency = Math.round(calcConsistency(finTrace.raw) * 10) / 10;
     saveResult({
       date: new Date().toISOString(),
       mode: cfg.saveMode,
@@ -478,6 +516,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       correctChars: f.correctChars,
       totalTyped: typed.length,
       durationSec: Math.round(finishElapsed * 10) / 10,
+      consistency: finConsistency,
     })
       .then(() => {
         resultSaved = true;
@@ -530,6 +569,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (isWordDeleteKey(data)) {
           if (typed.length > 0) {
             typed = deleteLastWord(typed);
+            snapshot();
             lastKeyAt = Date.now();
             draw();
           }
@@ -541,6 +581,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         if (data === "\x7f" || data === "\x08") {
           if (typed.length > 0) {
             typed = typed.slice(0, -1);
+            snapshot();
             lastKeyAt = Date.now();
             draw();
           }
@@ -549,6 +590,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         // Ctrl-U: clear all
         if (data === "\x15") {
           typed = "";
+          snapshot();
           lastKeyAt = Date.now();
           draw();
           return;
@@ -572,6 +614,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         void correctKeystrokes;
         void totalKeystrokes;
         if (added) {
+          snapshot();
           lastKeyAt = Date.now();
           draw();
           checkEnd();

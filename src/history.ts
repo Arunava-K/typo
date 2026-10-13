@@ -11,6 +11,7 @@ export interface HistoryEntry {
   correctChars: number;
   totalTyped: number;
   durationSec: number;
+  consistency?: number; // 0–100, steady pace → ~100 (added v0.2, optional for old rows)
 }
 
 function dir(): string {
@@ -45,18 +46,24 @@ export function summarize(hist: HistoryEntry[]): string {
   const wpms = hist.map((h) => h.wpm);
   const best = Math.max(...wpms);
   const avg = wpms.reduce((a, b) => a + b, 0) / wpms.length;
+  const conss = hist.map((h) => h.consistency ?? NaN).filter((x) => Number.isFinite(x));
+  const avgCons = conss.length > 0 ? conss.reduce((a, b) => a + b, 0) / conss.length : NaN;
   const recent = hist.slice(-10).reverse();
   const lines: string[] = [];
-  lines.push(`Tests: ${hist.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm`);
+  lines.push(
+    `Tests: ${hist.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm` +
+      (Number.isFinite(avgCons) ? `   Cons: ${avgCons.toFixed(1)}%` : ""),
+  );
   lines.push("");
-  lines.push("  date                  mode        wpm    raw    acc");
-  lines.push("  ──────────────────────────────────────────────────");
+  lines.push("  date                  mode        wpm    raw    acc   cons");
+  lines.push("  ─────────────────────────────────────────────────────────");
   for (const h of recent) {
     const d = h.date.slice(0, 16).replace("T", " ");
+    const cons = h.consistency != null ? `${h.consistency.toFixed(1).padStart(5)}%` : "    — ";
     lines.push(
       `  ${d}   ${h.mode.padEnd(10)} ${h.wpm.toFixed(1).padStart(5)} ${h.raw
         .toFixed(1)
-        .padStart(5)}  ${h.acc.toFixed(1).padStart(5)}%`,
+        .padStart(5)}  ${h.acc.toFixed(1).padStart(5)}% ${cons}`,
     );
   }
   return lines.join("\n");
