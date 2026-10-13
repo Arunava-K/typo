@@ -1,19 +1,47 @@
 {
-  "name": "typo",
+  "name": "@reading_steiner/typo",
   "version": "0.1.0",
   "description": "CLI typing practice & speed test — like Monkeytype/10fastfingers for the terminal",
   "type": "module",
   "bin": {
-    "typo": "./dist/index.js"
+    "typo": "dist/index.js"
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc && node dist/index.js",
     "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
-  "keywords": ["typing", "wpm", "cli", "practice", "speed-test"],
+  "keywords": [
+    "typing",
+    "wpm",
+    "cli",
+    "practice",
+    "speed-test",
+    "typing-test",
+    "monkeytype",
+    "terminal"
+  ],
   "license": "MIT",
+  "author": "Arunava Karmakar <arunava19karmakar@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Arunava-K/typo.git"
+  },
+  "homepage": "https://github.com/Arunava-K/typo#readme",
+  "bugs": {
+    "url": "https://github.com/Arunava-K/typo/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "@types/node": "^22.7.4",
     "typescript": "^5.6.2"

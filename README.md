@@ -4,16 +4,27 @@ Like Monkeytype / 10fastfingers, but in your terminal. Pure Node.js + TypeScript
 
 ## Install
 
+Install globally to get the `typo` command:
+
 ```bash
-npm install
-npm run build
-npm link        # optional: makes `typo` available globally
+npm install -g @reading_steiner/typo
+typo
 ```
 
-Or run directly without linking:
+Or run it once without installing:
 
 ```bash
-node dist/index.js --time 30
+npx @reading_steiner/typo --time 30
+```
+
+### From source
+
+```bash
+git clone https://github.com/Arunava-K/typo.git
+cd typo
+npm install
+npm run build
+npm link        # makes `typo` available globally
 ```
 
 ## Usage

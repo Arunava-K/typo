@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { promises as fs } from "node:fs";
+import { createRequire } from "node:module";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
 import {
@@ -15,6 +16,9 @@ import {
 import { runMenu, type MenuConfig } from "./menu.js";
 import { runReplay } from "./replay.js";
 import { ansi, c } from "./ui.js";
+
+const require = createRequire(import.meta.url);
+const { version: pkgVersion } = require("../package.json") as { version: string };
 
 interface Mode {
   kind: "time" | "words" | "quote" | "custom" | "daily";
@@ -358,7 +362,7 @@ async function main(): Promise<void> {
     return;
   }
   if (version) {
-    console.log("typo 0.1.0");
+    console.log(`typo ${pkgVersion}`);
     return;
   }
   if (debugKeys) {
