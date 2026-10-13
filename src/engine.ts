@@ -1,4 +1,4 @@
-import { ansi, c, termWidth } from "./ui.js";
+import { ansi, c, termHeight, termWidth } from "./ui.js";
 import { scoreRun } from "./stats.js";
 import { saveResult } from "./history.js";
 
@@ -126,6 +126,11 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
   function draw() {
     const width = Math.max(40, termWidth());
+    const height = Math.max(10, termHeight());
+    // App-like centered column (Monkeytype style): cap content width,
+    // pad it horizontally so it sits in the middle of wide terminals.
+    const contentWidth = Math.min(width, 80);
+    const leftPad = " ".repeat(Math.max(0, Math.floor((width - contentWidth) / 2)));
     const e = elapsed();
     const s = liveScore();
     const timeLabel =
@@ -142,75 +147,92 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           ? Math.min(1, typed.length / target.length)
           : 0;
 
-    const barW = Math.min(30, width - 20);
+    const barW = Math.min(30, contentWidth - 20);
     const filled = Math.round(progress * barW);
     const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barW - filled));
 
-    let out = ansi.clearScreen + ansi.hideCursor;
+    // Build the screen as discrete lines, then center vertically.
+    const lines: string[] = [];
     // header
-    out += c(ansi.bold + ansi.cyan, "typo");
-    out += c(ansi.gray, `  │  ${cfg.modeLabel}  │  ⏱ ${timeLabel}  │  `);
-    out += c(ansi.yellow, `${s.wpm.toFixed(0)} wpm`);
-    out += c(ansi.gray, "  │  ");
-    out += c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}% acc`);
-    out += "\n";
-    out += c(ansi.gray, bar) + "\n\n";
+    lines.push(
+      c(ansi.bold + ansi.cyan, "typo") +
+        c(ansi.gray, `  │  ${cfg.modeLabel}  │  ⏱ ${timeLabel}  │  `) +
+        c(ansi.yellow, `${s.wpm.toFixed(0)} wpm`) +
+        c(ansi.gray, "  │  ") +
+        c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}% acc`),
+    );
+    lines.push(c(ansi.gray, bar));
+    lines.push("");
 
     if (!finished) {
       if (startTime === null) {
-        out += c(ansi.gray, "Start typing to begin…\n\n");
+        lines.push(c(ansi.gray, "Start typing to begin…"));
+        lines.push("");
       } else {
-        out += "\n";
+        lines.push("");
       }
       // text window
-      const lines = layoutLines(target, width);
+      const textLines = layoutLines(target, contentWidth);
       let cursorLine = 0;
-      for (let li = 0; li < lines.length; li++) {
-        if (lines[li]!.includes(typed.length) || (typed.length >= target.length && li === lines.length - 1)) {
+      for (let li = 0; li < textLines.length; li++) {
+        if (textLines[li]!.includes(typed.length) || (typed.length >= target.length && li === textLines.length - 1)) {
           cursorLine = li;
           break;
         }
-        if (lines[li]!.length > 0 && typed.length > lines[li]![lines[li]!.length - 1]!) {
-          cursorLine = Math.min(li + 1, lines.length - 1);
+        if (textLines[li]!.length > 0 && typed.length > textLines[li]![textLines[li]!.length - 1]!) {
+          cursorLine = Math.min(li + 1, textLines.length - 1);
         }
       }
-      const WIN = 6;
+      const WIN = 5;
       let start = Math.max(0, cursorLine - 1);
-      if (start + WIN > lines.length) start = Math.max(0, lines.length - WIN);
-      const end = Math.min(lines.length, start + WIN);
+      if (start + WIN > textLines.length) start = Math.max(0, textLines.length - WIN);
+      const end = Math.min(textLines.length, start + WIN);
 
       for (let li = start; li < end; li++) {
-        const idxs = lines[li]!;
+        const idxs = textLines[li]!;
         let line = "";
         for (const idx of idxs) {
           line += renderChar(target, typed, idx, idx === typed.length);
         }
         // cursor past end of text
-        if (typed.length >= target.length && li === lines.length - 1) {
+        if (typed.length >= target.length && li === textLines.length - 1) {
           line += c(ansi.inverse, " ");
         }
         // extra chars beyond target
-        if (li === lines.length - 1 && typed.length > target.length) {
+        if (li === textLines.length - 1 && typed.length > target.length) {
           const extra = typed.slice(target.length, target.length + 20);
           for (const ch of extra) line += c(ansi.bgRed + ansi.white, ch === " " ? " " : ch);
         }
-        out += line + "\n";
+        lines.push(line);
       }
-      if (end < lines.length) out += c(ansi.gray, `  … +${lines.length - end} more lines`) + "\n";
-      out += "\n";
-      out += c(ansi.gray, "esc quit   ·   ctrl+w delete word   ·   backspace fix") + "\n";
+      if (end < textLines.length) lines.push(c(ansi.gray, `… +${textLines.length - end} more lines`));
+      lines.push("");
+      lines.push(c(ansi.gray, "esc quit   ·   ctrl+w delete word   ·   backspace fix"));
     } else {
       // results
       const f = scoreRun(target, typed, finishElapsed);
-      out += c(ansi.bold + ansi.green, "  done!\n\n");
-      out += `  ${c(ansi.gray, "wpm")}   ${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1).padStart(6))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}\n`;
-      out += `  ${c(ansi.gray, "acc")}   ${c(ansi.bold + ansi.white, f.acc.toFixed(1).padStart(6) + "%")}\n`;
-      out += "\n";
-      out += `  ${c(ansi.gray, "chars")}  ${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}\n`;
-      out += `  ${c(ansi.gray, "time")}   ${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}\n`;
-      if (resultSaved) out += `  ${c(ansi.gray, "saved to ~/.typo/history.json")}\n`;
-      out += "\n";
-      out += c(ansi.cyan, "  [r]") + c(ansi.gray, " retry   ") + c(ansi.cyan, "[tab/n]") + c(ansi.gray, " next   ") + c(ansi.cyan, "[q/esc]") + c(ansi.gray, " quit") + "\n";
+      lines.push(c(ansi.bold + ansi.green, "done!"));
+      lines.push("");
+      lines.push(
+        `${c(ansi.gray, "wpm")}   ${c(ansi.bold + ansi.yellow, f.wpm.toFixed(1).padStart(6))}   ${c(ansi.gray, "raw " + f.raw.toFixed(1))}`,
+      );
+      lines.push(`  ${c(ansi.gray, "acc")}   ${c(ansi.bold + ansi.white, f.acc.toFixed(1).padStart(6) + "%")}`);
+      lines.push("");
+      lines.push(
+        `  ${c(ansi.gray, "chars")}  ${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
+      );
+      lines.push(`  ${c(ansi.gray, "time")}   ${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`);
+      if (resultSaved) lines.push(`  ${c(ansi.gray, "saved to ~/.typo/history.json")}`);
+      lines.push("");
+      lines.push(
+        c(ansi.cyan, "[r]") + c(ansi.gray, " retry   ") + c(ansi.cyan, "[tab/n]") + c(ansi.gray, " next   ") + c(ansi.cyan, "[q/esc]") + c(ansi.gray, " quit"),
+      );
+    }
+
+    const topPad = Math.max(0, Math.floor((height - lines.length) / 2));
+    let out = ansi.clearScreen + ansi.hideCursor + "\n".repeat(topPad);
+    for (const ln of lines) {
+      out += (ln.length === 0 ? "" : leftPad) + ln + "\n";
     }
 
     stdout.write(out);

@@ -29,6 +29,10 @@ export function termWidth(): number {
   return process.stdout.columns || 80;
 }
 
+export function termHeight(): number {
+  return process.stdout.rows || 24;
+}
+
 export function padRight(s: string, n: number): string {
   // naive pad (assumes no ANSI inside); callers strip first if needed
   if (s.length >= n) return s;
