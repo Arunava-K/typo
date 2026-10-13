@@ -13,7 +13,7 @@ import {
   worstKeys,
   type KeyPressEvent,
 } from "./stats.js";
-import { saveLastReplay, saveResult, type ReplayEvent } from "./history.js";
+import { saveLastReplay, saveResult, loadHistory, type ReplayEvent } from "./history.js";
 
 export interface RunConfig {
   target: string;
@@ -342,6 +342,16 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   stdin.resume();
   stdout.write(ENTER_ALT);
 
+  // Pre-run best for this mode, for the results-screen PB badge (Task #6).
+  // Loaded once up front so the just-finished run can't compare to itself.
+  let priorBest: number | null = null;
+  try {
+    const prior = (await loadHistory()).filter((h) => h.mode === cfg.saveMode);
+    if (prior.length > 0) priorBest = Math.max(...prior.map((h) => h.wpm));
+  } catch {
+    /* history unreadable — results simply show no PB badge */
+  }
+
   // True viewport size (don't trust winsize blindly for centering).
   const cal = await calibrateViewport();
   let vpCols = termWidth();
@@ -590,6 +600,11 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         `${c(ansi.gray, "cpm".padEnd(6))}${c(ansi.bold + ansi.white, f.cpm.toFixed(0))}   ${c(ansi.gray, "raw " + f.cpmRaw.toFixed(0))}   ${c(ansi.gray, String(f.corrections) + (f.corrections === 1 ? " correction" : " corrections"))}`,
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
       ];
+      if (priorBest == null) {
+        body.push(c(ansi.gray, `★ first recorded ${cfg.saveMode} run`));
+      } else if (f.wpm > priorBest) {
+        body.push(c(ansi.bold + ansi.yellow, `★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)})`));
+      }
       if (resultSaved) body.push(c(ansi.gray, "saved to ~/.typo/history.json"));
       body.push("");
       body.push(

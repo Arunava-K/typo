@@ -35,7 +35,7 @@ custom file, or history, all without memorizing flags.
 | `--text "..."` | Practice with inline custom text |
 | `-p, --punctuation` | Add punctuation + capitals (words/time modes) |
 | `--numbers` | Add numbers (words/time modes) |
-| `--history` | Show past results, best & average |
+| `--history` | Show past results, per-mode PBs & averages |
 | `--replay` | Replay your last run keystroke-by-keystroke |
 | `--debug-keys` | Show key codes to diagnose shortcuts |
 | `-h, --help` | Help |

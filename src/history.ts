@@ -92,6 +92,58 @@ export async function saveResult(entry: HistoryEntry): Promise<void> {
   await fs.writeFile(file(), JSON.stringify(trimmed, null, 2), "utf8");
 }
 
+// --- Personal-best matrix (Task #6) ---
+
+export interface ModeBest {
+  mode: string;
+  runs: number;
+  wpm: number;
+  acc: number;
+  date: string; // ISO of the best run
+}
+
+/** Canonical sort: time (by seconds) → words (by count) → quote → custom → other. */
+function parseModeSort(m: string): { group: number; num: number } {
+  const t = /^time (\d+)s$/.exec(m);
+  if (t) return { group: 0, num: Number(t[1]) };
+  const w = /^words (\d+)$/.exec(m);
+  if (w) return { group: 1, num: Number(w[1]) };
+  if (m === "quote") return { group: 2, num: 0 };
+  if (m === "custom") return { group: 3, num: 0 };
+  return { group: 4, num: 0 };
+}
+
+function cmpMode(a: string, b: string): number {
+  const pa = parseModeSort(a);
+  const pb = parseModeSort(b);
+  if (pa.group !== pb.group) return pa.group - pb.group;
+  if (pa.num !== pb.num) return pa.num - pb.num;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Best run per mode. Ties break toward higher accuracy, then recency.
+ * Pure function so grouping/sorting/tiebreaks are unit-testable.
+ */
+export function pbMatrix(hist: HistoryEntry[]): ModeBest[] {
+  const map = new Map<string, { best: HistoryEntry; runs: number }>();
+  for (const h of hist) {
+    const cur = map.get(h.mode);
+    if (!cur) {
+      map.set(h.mode, { best: h, runs: 1 });
+    } else {
+      cur.runs++;
+      const b = cur.best;
+      if (h.wpm > b.wpm || (h.wpm === b.wpm && (h.acc > b.acc || (h.acc === b.acc && h.date > b.date)))) {
+        cur.best = h;
+      }
+    }
+  }
+  return [...map.entries()]
+    .map(([mode, v]) => ({ mode, runs: v.runs, wpm: v.best.wpm, acc: v.best.acc, date: v.best.date }))
+    .sort((a, b) => cmpMode(a.mode, b.mode));
+}
+
 export function summarize(hist: HistoryEntry[]): string {
   if (hist.length === 0) return "No history yet. Run `typo` to record your first test.";
   const wpms = hist.map((h) => h.wpm);
@@ -105,6 +157,13 @@ export function summarize(hist: HistoryEntry[]): string {
     `Tests: ${hist.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm` +
       (Number.isFinite(avgCons) ? `   Cons: ${avgCons.toFixed(1)}%` : ""),
   );
+  const pbs = pbMatrix(hist);
+  lines.push(`PBs (${pbs.length} mode${pbs.length === 1 ? "" : "s"}):`);
+  for (const p of pbs) {
+    lines.push(
+      `  ${p.mode.padEnd(10)} ${p.wpm.toFixed(1).padStart(5)} wpm  ${p.acc.toFixed(1).padStart(5)}%  x${p.runs}  ${p.date.slice(0, 10)}`,
+    );
+  }
   lines.push("");
   lines.push("  date                  mode        wpm    raw    acc   cons");
   lines.push("  ─────────────────────────────────────────────────────────");
