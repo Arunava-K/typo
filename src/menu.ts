@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
-import { ansi, c, termHeight, termWidth } from "./ui.js";
-import { composeScreen, enterFullscreen, leaveFullscreen } from "./engine.js";
+import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
+import { buildBox, composeScreen, enterFullscreen, leaveFullscreen } from "./engine.js";
 import { loadHistory, summarize } from "./history.js";
 
 export interface MenuConfig {
@@ -151,38 +151,41 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     const vpCols = termWidth();
     const vpRows = Math.max(10, termHeight());
     const contentWidth = Math.min(vpCols, 60);
-    const lines: string[] = [];
 
     if (screen === "history") {
-      lines.push(c(ansi.bold + ansi.cyan, "typo  ·  history"));
-      lines.push("");
-      const maxLines = Math.max(4, vpRows - 6);
-      for (const ln of histLines.slice(-maxLines)) lines.push(c(ansi.gray, ln));
-      lines.push("");
-      lines.push(c(ansi.gray, "press any key to go back"));
+      const maxLines = Math.max(4, vpRows - 10);
+      const inner = histLines.slice(-maxLines);
+      const w = Math.max(1, ...inner.map((l) => stripAnsi(l).length));
+      const content = [
+        padCenter(c(ansi.bold + ansi.cyan, "history"), w),
+        "",
+        ...inner.map((l) => c(ansi.gray, l)),
+      ];
+      const lines = [...buildBox(content), "", c(ansi.gray, "press any key to go back")];
       stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
       return;
     }
 
-    lines.push(c(ansi.bold + ansi.cyan, "typo"));
-    lines.push(c(ansi.gray, "set up your test"));
-    lines.push("");
-
+    const body: string[] = [];
     rows.forEach((id, i) => {
       const active = i === sel;
       const marker = active ? c(ansi.bold + ansi.cyan, "> ") : "  ";
       if (id === "start" || id === "quit") {
-        if (i > 0 && (rows[i - 1] === "numbers" || rows[i - 1] === "start")) {
-          if (id === "start") lines.push("");
-        }
-        lines.push(marker + rowValue(id));
+        if (id === "start") body.push("");
+        body.push(marker + rowValue(id));
         return;
       }
       const label = c(active ? ansi.bold + ansi.white : ansi.gray, rowLabel(id).padEnd(13));
-      lines.push(marker + label + rowValue(id));
+      body.push(marker + label + rowValue(id));
     });
 
-    // tidy separator between options and actions is handled by the blank line above "start"
+    const innerW = Math.max(...body.map((l) => stripAnsi(l).length));
+    const lines = buildBox([
+      padCenter(c(ansi.bold + ansi.cyan, "typo"), innerW),
+      padCenter(c(ansi.gray, "set up your test"), innerW),
+      "",
+      ...body,
+    ]);
     lines.push("");
     if (editing) {
       lines.push(c(ansi.gray, "type a file path  ·  enter confirm  ·  esc cancel"));
