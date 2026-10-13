@@ -13,6 +13,7 @@ import {
   worstKeys,
   type KeyPressEvent,
 } from "./stats.js";
+import { levelForXp, totalXp, xpForDuration } from "./progression.js";
 import { saveLastReplay, saveResult, loadHistory, type ReplayEvent } from "./history.js";
 
 export interface RunConfig {
@@ -345,9 +346,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   // Pre-run best for this mode, for the results-screen PB badge (Task #6).
   // Loaded once up front so the just-finished run can't compare to itself.
   let priorBest: number | null = null;
+  let priorXp = 0;
   try {
-    const prior = (await loadHistory()).filter((h) => h.mode === cfg.saveMode);
+    const priorHist = await loadHistory();
+    const prior = priorHist.filter((h) => h.mode === cfg.saveMode);
     if (prior.length > 0) priorBest = Math.max(...prior.map((h) => h.wpm));
+    priorXp = totalXp(priorHist);
   } catch {
     /* history unreadable — results simply show no PB badge */
   }
@@ -367,6 +371,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let finishElapsed = 0;
   let resultSaved = false;
   let lastKeyAt = 0;
+  let xpNote = ""; // " · +30 XP" (+ level-up), baked at finish (Task #9)
 
   // Per-keystroke timeline for WPM trace + consistency (Task #1).
   const samples: { t: number; correct: number; typed: number }[] = [];
@@ -605,7 +610,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       } else if (f.wpm > priorBest) {
         body.push(c(ansi.bold + ansi.yellow, `★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)})`));
       }
-      if (resultSaved) body.push(c(ansi.gray, "saved to ~/.typo/history.json"));
+      if (resultSaved) body.push(c(ansi.gray, `saved to ~/.typo/history.json${xpNote}`));
       body.push("");
       body.push(
         c(ansi.cyan, "[r]") + c(ansi.gray, " retry   ") + c(ansi.cyan, "[tab/n]") + c(ansi.gray, " next   ") + c(ansi.cyan, "[q/esc]") + c(ansi.gray, " quit"),
@@ -631,6 +636,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       checkWord(s + 1, target.length);
     }
     const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
+    const gained = xpForDuration(finishElapsed);
+    const lvBefore = levelForXp(priorXp);
+    const lvAfter = levelForXp(priorXp + gained);
+    xpNote = ` · +${gained} XP` + (lvAfter > lvBefore ? ` · ★ level up → L${lvAfter}` : "");
     const finTrace = buildWpmTrace(
       [...samples.map((s) => ({ tSec: s.t, correctChars: s.correct, typedLen: s.typed })),
         { tSec: finishElapsed, correctChars: f.correctChars, typedLen: typed.length }],

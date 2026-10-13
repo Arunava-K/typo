@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { badges, streaks, totalXp, xpProgress } from "./progression.js";
 import { sparkline } from "./stats.js";
 
 export interface HistoryEntry {
@@ -276,6 +277,20 @@ export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): str
   );
   lines.push(
     `Total: ${fmtDuration(tot.seconds)} typing   ${tot.words.toLocaleString("en-US")} words   Activity 14d: ${activityBar(cells)} (${activeDays}/14 days)`,
+  );
+  // Progression is global (full history), not per-filter — like an account.
+  const nowMs = filter.now ?? Date.now();
+  const xp = totalXp(hist);
+  const prog = xpProgress(xp);
+  const st = streaks(hist, nowMs);
+  const bd = badges(hist, nowMs);
+  const earned = bd.filter((b) => b.earned);
+  lines.push(
+    `Level ${prog.level} (${xp.toLocaleString("en-US")} XP · ${(prog.need - prog.into).toLocaleString("en-US")} to L${prog.level + 1})   Streak: ${st.current > 0 ? `${st.current} day${st.current === 1 ? "" : "s"}` : "—"} (best ${st.best})`,
+  );
+  lines.push(
+    `Badges (${earned.length}/${bd.length}): ${earned.length > 0 ? earned.map((b) => b.name).join(" · ") : "—"}` +
+      (earned.length < bd.length ? `   (+${bd.length - earned.length} locked)` : ""),
   );
   lines.push(`Trend (wpm, oldest → newest): ${sparkline(rows.map((h) => h.wpm), 40)}`);
   const bins = wpmHistogram(rows.map((h) => h.wpm));
