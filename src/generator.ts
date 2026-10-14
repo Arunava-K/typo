@@ -95,3 +95,64 @@ export function normalizeCustom(text: string, maxChars = 1200): string {
   if (t.length > maxChars) t = t.slice(0, maxChars).trimEnd() + "…";
   return t;
 }
+
+// --- Sentence mode (Task #17): full grammatical sentences ---
+
+const SENTENCES: string[] = [
+  "The river bends around the old stone bridge at dawn.",
+  "She packed her bags before the sun came up.",
+  "Every garden needs both patience and rain.",
+  "The cat slept through the entire thunderstorm.",
+  "We found a small cafe hidden behind the station.",
+  "His letter arrived three weeks after he left.",
+  "The mountain trail grows steep past the waterfall.",
+  "Children raced their bicycles down the hill.",
+  "A quiet library is the best place to think.",
+  "The baker sells warm bread every morning.",
+  "They crossed the desert in an old blue truck.",
+  "My grandmother tells the greatest stories.",
+  "The orchestra tuned their instruments slowly.",
+  "Rain tapped against the bedroom window all night.",
+  "He fixed the broken fence with spare wire.",
+  "The lighthouse guides ships through the fog.",
+  "We watched the sunset from the rooftop garden.",
+  "Her garden grows tomatoes, basil, and mint.",
+  "The train arrived exactly on the minute.",
+  "Dogs barked at the stranger by the gate.",
+  "The museum opens its new wing in spring.",
+  "He learned to sail during one calm summer.",
+  "The old clock chimes thirteen times at midnight.",
+  "Fresh snow covered the silent pine forest.",
+  "She keeps a diary under her pillow.",
+  "The chef tasted the soup and smiled broadly.",
+  "Wild geese flew south before the frost.",
+  "Our neighbors built a treehouse last weekend.",
+  "The river carried fallen leaves toward the sea.",
+  "He whistled while he painted the front door.",
+  "The stars appeared one by one after dusk.",
+  "A red fox darted across the empty road.",
+  "The teacher wrote the lesson on the board.",
+  "Warm wind moved through the tall dry grass.",
+  "She bought fresh apples at the corner market.",
+  "The puppy chewed my left shoe again today.",
+  "Clouds gathered over the distant gray hills.",
+  "He reads one chapter before turning off the lamp.",
+  "The ferry crosses the bay twice each morning.",
+  "Autumn paints the valley gold and crimson.",
+];
+
+/**
+ * N full sentences joined by spaces (cycles the shuffled bank when
+ * n exceeds it). Injectable rng for deterministic tests.
+ */
+export function generateSentences(n: number, rng: () => number = Math.random): string {
+  const count = Math.max(1, Math.floor(n));
+  const bank = [...SENTENCES];
+  for (let i = bank.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [bank[i], bank[j]] = [bank[j]!, bank[i]!];
+  }
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) out.push(bank[i % bank.length]!);
+  return out.join(" ");
+}

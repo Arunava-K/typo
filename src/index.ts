@@ -2,7 +2,7 @@
 import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
-import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
+import { generateWords, generateQuote, generateDaily, generateSentences, dailyDateStr, normalizeCustom } from "./generator.js";
 import { CODE_LANGS, generateCode, normalizeCodeLang, type CodeLang } from "./code.js";
 import {
   exportCsv,
@@ -22,12 +22,14 @@ const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
 
 interface Mode {
-  kind: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen";
+  kind: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen" | "sentences";
   timeSec: number;
   wordCount: number;
+  sentCount: number;
   customText: string | null;
   customFile: string | null;
   codeLang: string | null;
+  combo: boolean; // --words N + --time S together: N words, hard S cap
   suddenDeath: boolean;
   noBackspace: boolean;
   minAcc: number | null;
@@ -54,6 +56,7 @@ ${H("Modes:")} ${D("(default: --time 30)")}
   ${flag("--daily")}            ${D("shared daily text (same all day, everywhere)  ◉")}
   ${flag("--code <lang>")}       ${D("code snippet test (python, javascript, go, rust…)  <>")}
   ${flag("--zen")}             ${D("free typing, no prompt — esc finishes  ∞")}
+  ${flag("--sentences [n]")}     ${D("full-sentence test, default 5  ¶")}
   ${flag("--custom <file>")}    ${D("practice with text from a file  ✎")}
   ${flag('--text "..."')}       ${D("practice with inline custom text")}
 
@@ -90,6 +93,8 @@ ${H("Examples:")}
   ${D("$")} typo --daily              ${D("# today's shared text")}
   ${D("$")} typo --code python        ${D("# python snippet")}
   ${D("$")} typo --zen                ${D("# free typing")}
+  ${D("$")} typo --sentences 10       ${D("# 10 sentences")}
+  ${D("$")} typo --words 50 --time 60 ${D("# 50 words or 60s, whichever first")}
   ${D("$")} typo --custom essay.txt   ${D("# custom text from file")}
   ${D("$")} typo --replay             ${D("# watch your last run back")}
   ${divider(56)}
@@ -101,9 +106,11 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     kind: "time",
     timeSec: 30,
     wordCount: 50,
+    sentCount: 5,
     customText: null,
     customFile: null,
     codeLang: null,
+    combo: false,
     suddenDeath: false,
     noBackspace: false,
     minAcc: null,
@@ -121,6 +128,8 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   let exportFmt: "csv" | "json" | null = null;
   let importFile: string | null = null;
   let modeSet = false;
+  let timeSet = false;
+  let wordsSet = false;
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
@@ -133,6 +142,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.kind = "time";
       mode.timeSec = Math.round(v);
       modeSet = true;
+      timeSet = true;
     } else if (a.startsWith("--time=")) {
       const v = Number(a.split("=")[1]);
       if (!Number.isFinite(v) || v <= 0 || v > 600) {
@@ -142,6 +152,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.kind = "time";
       mode.timeSec = Math.round(v);
       modeSet = true;
+      timeSet = true;
     } else if (a === "--words" || a === "-w") {
       const v = Number(argv[++i]);
       if (!Number.isFinite(v) || v <= 0 || v > 1000) {
@@ -151,6 +162,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.kind = "words";
       mode.wordCount = Math.round(v);
       modeSet = true;
+      wordsSet = true;
     } else if (a.startsWith("--words=")) {
       const v = Number(a.split("=")[1]);
       if (!Number.isFinite(v) || v <= 0 || v > 1000) {
@@ -160,6 +172,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       mode.kind = "words";
       mode.wordCount = Math.round(v);
       modeSet = true;
+      wordsSet = true;
     } else if (a === "--quote" || a === "-q") {
       mode.kind = "quote";
       modeSet = true;
@@ -168,6 +181,29 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       modeSet = true;
     } else if (a === "--zen" || a === "-z") {
       mode.kind = "zen";
+      modeSet = true;
+    } else if (a === "--sentences" || a === "-S") {
+      const nx = argv[i + 1];
+      let n = 5;
+      if (nx !== undefined && /^\d+$/.test(nx)) {
+        i++;
+        n = Number(nx);
+      }
+      if (!Number.isFinite(n) || n < 1 || n > 50) {
+        console.error(`Invalid --sentences value: ${nx} (use 1–50)`);
+        process.exit(1);
+      }
+      mode.kind = "sentences";
+      mode.sentCount = Math.floor(n);
+      modeSet = true;
+    } else if (a.startsWith("--sentences=")) {
+      const n = Number(a.split("=").slice(1).join("="));
+      if (!Number.isFinite(n) || n < 1 || n > 50) {
+        console.error(`Invalid --sentences value (use 1–50)`);
+        process.exit(1);
+      }
+      mode.kind = "sentences";
+      mode.sentCount = Math.floor(n);
       modeSet = true;
     } else if (a === "--sudden-death") {
       mode.suddenDeath = true;
@@ -280,6 +316,12 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     }
   }
   void modeSet;
+  // --words N + --time S together (either order) make one capped test,
+  // but only when a bare mode didn't win after them.
+  if (timeSet && wordsSet && (mode.kind === "time" || mode.kind === "words")) {
+    mode.kind = "words";
+    mode.combo = true;
+  }
   if ((historyModes.length > 0 || historyLast != null) && !history) {
     console.error("--mode and --last need --history (e.g. typo --history --mode quote)");
     process.exit(1);
@@ -316,6 +358,10 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
     const mods = [mode.punctuation ? ",punct" : "", mode.numbers ? ",num" : ""].join("");
     return { text, label: `time ${mode.timeSec}s${mods}${ms.label}`, saveMode: `time ${mode.timeSec}s${ms.save}`, timeLimit: mode.timeSec, codeLang: null, zen: false };
   }
+  if (mode.kind === "words" && mode.combo) {
+    const text = generateWords(mode.wordCount, { punctuation: mode.punctuation, numbers: mode.numbers });
+    return { text, label: `words ${mode.wordCount} · ${mode.timeSec}s cap${ms.label}`, saveMode: `words ${mode.wordCount} (${mode.timeSec}s cap)${ms.save}`, timeLimit: mode.timeSec, codeLang: null, zen: false };
+  }
   if (mode.kind === "words") {
     const text = generateWords(mode.wordCount, { punctuation: mode.punctuation, numbers: mode.numbers });
     return { text, label: `words ${mode.wordCount}${ms.label}`, saveMode: `words ${mode.wordCount}${ms.save}`, timeLimit: null, codeLang: null, zen: false };
@@ -336,6 +382,10 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
   }
   if (mode.kind === "zen") {
     return { text: "", label: `zen${ms.label}`, saveMode: `zen${ms.save}`, timeLimit: null, codeLang: null, zen: true };
+  }
+  if (mode.kind === "sentences") {
+    const text = generateSentences(mode.sentCount);
+    return { text, label: `sentences ${mode.sentCount}${ms.label}`, saveMode: `sentences ${mode.sentCount}${ms.save}`, timeLimit: null, codeLang: null, zen: false };
   }
   // custom
   let raw = mode.customText ?? "";
@@ -361,6 +411,7 @@ async function menuLoop(): Promise<void> {
     mode: "time",
     timeSec: 30,
     wordCount: 50,
+    sentCount: 5,
     punctuation: false,
     numbers: false,
     customFile: "",
@@ -381,9 +432,11 @@ async function menuLoop(): Promise<void> {
       kind: m.config.mode,
       timeSec: m.config.timeSec,
       wordCount: m.config.wordCount,
+      sentCount: m.config.sentCount,
       customText: null,
       customFile: m.config.customFile || null,
       codeLang: m.config.codeLang || "python",
+      combo: false,
       suddenDeath: m.config.suddenDeath,
       noBackspace: m.config.noBackspace,
       minAcc: m.config.minAcc,

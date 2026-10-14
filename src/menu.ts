@@ -18,7 +18,7 @@ import { CODE_LANGS } from "./code.js";
 import { sparkline } from "./stats.js";
 
 export interface MenuConfig {
-  mode: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen";
+  mode: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen" | "sentences";
   timeSec: number;
   wordCount: number;
   punctuation: boolean;
@@ -29,13 +29,15 @@ export interface MenuConfig {
   noBackspace: boolean;
   minAcc: number | null;
   pace: number | null;
+  sentCount: number;
 }
 
 export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" };
 
 export const TIME_OPTS = [15, 30, 60, 120, 240];
 export const WORD_OPTS = [10, 25, 50, 100, 200];
-const MODES = ["time", "words", "quote", "custom", "daily", "code", "zen"] as const;
+export const SENT_OPTS = [3, 5, 10, 20];
+const MODES = ["time", "words", "quote", "custom", "daily", "code", "zen", "sentences"] as const;
 type ModeName = (typeof MODES)[number];
 
 /**
@@ -252,6 +254,7 @@ export type RowId =
   | "noback"
   | "minacc"
   | "pace"
+  | "sents"
   | "start"
   | "history"
   | "quit";
@@ -273,6 +276,7 @@ export function buildRows(mode: ModeName): RowId[] {
   if (mode === "words") rows.push("words");
   if (mode === "custom") rows.push("file");
   if (mode === "code") rows.push("lang");
+  if (mode === "sentences") rows.push("sents");
   rows.push("punct", "numbers", "death", "noback", "minacc", "pace", "start", "history", "quit");
   return rows;
 }
@@ -312,6 +316,7 @@ const MODE_LABEL: Record<ModeName, string> = {
   daily: "daily",
   code: "code",
   zen: "zen",
+  sentences: "sentences",
 };
 
 const MODE_ICON: Record<ModeName, string> = {
@@ -322,6 +327,7 @@ const MODE_ICON: Record<ModeName, string> = {
   daily: "◉",
   code: "<>",
   zen: "∞",
+  sentences: "¶",
 };
 
 export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
@@ -340,6 +346,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     codeLang: (CODE_LANGS as readonly string[]).includes(defaults.codeLang) ? defaults.codeLang : "python",
     minAcc: [null, 80, 85, 90, 95].includes(defaults.minAcc) ? defaults.minAcc : null,
     pace: [null, 40, 60, 80, 100, 120].includes(defaults.pace) ? defaults.pace : null,
+    sentCount: snap(SENT_OPTS, defaults.sentCount),
   };
   let rows = buildRows(cfg.mode);
   let sel = 0;
@@ -369,6 +376,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
           : c(ansi.gray, "○ no file yet — select to add one");
       case "lang":
         return cycler(cfg.codeLang);
+      case "sents":
+        return cycler(`${cfg.sentCount}`);
       case "punct":
         return onOffPill(cfg.punctuation);
       case "numbers":
@@ -417,6 +426,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return `${ic("✎")}file`;
       case "lang":
         return `${ic("<>")}language`;
+      case "sents":
+        return `${ic("¶")}sentences`;
       case "punct":
         return `${ic("Aa")}punctuation`;
       case "numbers":
@@ -582,6 +593,9 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       case "words":
         cfg.wordCount = cycle(WORD_OPTS, cfg.wordCount, dir);
         break;
+      case "sents":
+        cfg.sentCount = cycle(SENT_OPTS, cfg.sentCount, dir);
+        break;
       case "lang":
         cfg.codeLang = cycle(CODE_LANGS as readonly string[], cfg.codeLang, dir);
         break;
@@ -679,6 +693,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         case "time":
         case "words":
         case "lang":
+        case "sents":
           adjust(id, 1);
           draw();
           break;

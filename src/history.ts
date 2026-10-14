@@ -321,17 +321,21 @@ export interface ModeBest {
   date: string; // ISO of the best run
 }
 
-/** Canonical sort: time (by seconds) → words (by count) → quote → custom → code → daily → other. */
+/** Canonical sort: time → words → quote → custom → code → daily → sentences → other. */
 function parseModeSort(m: string): { group: number; num: number } {
   const t = /^time (\d+)s$/.exec(m);
   if (t) return { group: 0, num: Number(t[1]) };
   const w = /^words (\d+)$/.exec(m);
   if (w) return { group: 1, num: Number(w[1]) };
+  const c = /^words (\d+) \(\d+s cap\)$/.exec(m);
+  if (c) return { group: 1, num: Number(c[1]) + 0.5 };
   if (m === "quote") return { group: 2, num: 0 };
   if (m === "custom") return { group: 3, num: 0 };
   if (m.startsWith("code ")) return { group: 4, num: 0 };
   if (m === "daily") return { group: 5, num: 0 };
-  return { group: 6, num: 0 };
+  const s = /^sentences (\d+)$/.exec(m);
+  if (s) return { group: 6, num: Number(s[1]) };
+  return { group: 7, num: 0 };
 }
 
 function cmpMode(a: string, b: string): number {
