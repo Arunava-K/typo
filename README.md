@@ -120,6 +120,7 @@ under the panel.
 | `--words <n>` | Fixed word-count test, e.g. `--words 10/25/50/100` (1–1000) |
 | `--quote` | Random quote / sentence ❝ |
 | `--daily` | Shared daily text, same all day on every machine ◉ |
+| `--code <lang>` | Code snippet test: python, javascript, typescript, go, rust, java, c, cpp, csharp, php, ruby, html |
 | `--custom <file>` | Practice with text from a file ✎ |
 | `--text "..."` | Practice with inline custom text |
 | `-p, --punctuation` | Add punctuation + capitals (words/time modes) |
@@ -143,6 +144,7 @@ typo --time 60 -p       # 60s with punctuation
 typo --words 50         # 50 words
 typo --quote            # random quote
 typo --daily            # today's shared text
+typo --code python      # python snippet
 typo --custom essay.txt # your own text
 typo --history          # past scores (colorized)
 typo --replay           # watch your last run back

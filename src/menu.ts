@@ -14,22 +14,24 @@ import {
   type HistoryEntry,
 } from "./history.js";
 import { badges, streaks, totalXp, xpProgress } from "./progression.js";
+import { CODE_LANGS } from "./code.js";
 import { sparkline } from "./stats.js";
 
 export interface MenuConfig {
-  mode: "time" | "words" | "quote" | "custom" | "daily";
+  mode: "time" | "words" | "quote" | "custom" | "daily" | "code";
   timeSec: number;
   wordCount: number;
   punctuation: boolean;
   numbers: boolean;
   customFile: string;
+  codeLang: string;
 }
 
 export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" };
 
 export const TIME_OPTS = [15, 30, 60, 120, 240];
 export const WORD_OPTS = [10, 25, 50, 100, 200];
-const MODES = ["time", "words", "quote", "custom", "daily"] as const;
+const MODES = ["time", "words", "quote", "custom", "daily", "code"] as const;
 type ModeName = (typeof MODES)[number];
 
 /**
@@ -239,6 +241,7 @@ export type RowId =
   | "time"
   | "words"
   | "file"
+  | "lang"
   | "punct"
   | "numbers"
   | "start"
@@ -261,6 +264,7 @@ export function buildRows(mode: ModeName): RowId[] {
   if (mode === "time") rows.push("time");
   if (mode === "words") rows.push("words");
   if (mode === "custom") rows.push("file");
+  if (mode === "code") rows.push("lang");
   rows.push("punct", "numbers", "start", "history", "quit");
   return rows;
 }
@@ -298,6 +302,7 @@ const MODE_LABEL: Record<ModeName, string> = {
   quote: "quote",
   custom: "custom file",
   daily: "daily",
+  code: "code",
 };
 
 const MODE_ICON: Record<ModeName, string> = {
@@ -306,6 +311,7 @@ const MODE_ICON: Record<ModeName, string> = {
   quote: "❝",
   custom: "✎",
   daily: "◉",
+  code: "<>",
 };
 
 export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
@@ -321,6 +327,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     ...defaults,
     timeSec: snap(TIME_OPTS, defaults.timeSec),
     wordCount: snap(WORD_OPTS, defaults.wordCount),
+    codeLang: (CODE_LANGS as readonly string[]).includes(defaults.codeLang) ? defaults.codeLang : "python",
   };
   let rows = buildRows(cfg.mode);
   let sel = 0;
@@ -348,6 +355,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return cfg.customFile
           ? c(ansi.white, cfg.customFile)
           : c(ansi.gray, "○ no file yet — select to add one");
+      case "lang":
+        return cycler(cfg.codeLang);
       case "punct":
         return onOffPill(cfg.punctuation);
       case "numbers":
@@ -386,6 +395,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return `${ic("≡")}words`;
       case "file":
         return `${ic("✎")}file`;
+      case "lang":
+        return `${ic("<>")}language`;
       case "punct":
         return `${ic("Aa")}punctuation`;
       case "numbers":
@@ -543,6 +554,9 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       case "words":
         cfg.wordCount = cycle(WORD_OPTS, cfg.wordCount, dir);
         break;
+      case "lang":
+        cfg.codeLang = cycle(CODE_LANGS as readonly string[], cfg.codeLang, dir);
+        break;
       case "punct":
         cfg.punctuation = !cfg.punctuation;
         break;
@@ -624,6 +638,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         case "mode":
         case "time":
         case "words":
+        case "lang":
           adjust(id, 1);
           draw();
           break;

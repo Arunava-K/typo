@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
+import { CODE_LANGS, generateCode, normalizeCodeLang } from "./code.js";
 import {
   exportCsv,
   exportJson,
@@ -21,11 +22,12 @@ const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
 
 interface Mode {
-  kind: "time" | "words" | "quote" | "custom" | "daily";
+  kind: "time" | "words" | "quote" | "custom" | "daily" | "code";
   timeSec: number;
   wordCount: number;
   customText: string | null;
   customFile: string | null;
+  codeLang: string | null;
   punctuation: boolean;
   numbers: boolean;
 }
@@ -46,6 +48,7 @@ ${H("Modes:")} ${D("(default: --time 30)")}
   ${flag("--words <n>")}        ${D("fixed word count test (e.g. 10, 25, 50, 100)")}
   ${flag("--quote")}            ${D("random quote / sentence  ❝")}
   ${flag("--daily")}            ${D("shared daily text (same all day, everywhere)  ◉")}
+  ${flag("--code <lang>")}       ${D("code snippet test (python, javascript, go, rust…)  <>")}
   ${flag("--custom <file>")}    ${D("practice with text from a file  ✎")}
   ${flag('--text "..."')}       ${D("practice with inline custom text")}
 
@@ -76,6 +79,7 @@ ${H("Examples:")}
   ${D("$")} typo --words 50           ${D("# 50 words")}
   ${D("$")} typo --quote              ${D("# random quote")}
   ${D("$")} typo --daily              ${D("# today's shared text")}
+  ${D("$")} typo --code python        ${D("# python snippet")}
   ${D("$")} typo --custom essay.txt   ${D("# custom text from file")}
   ${D("$")} typo --replay             ${D("# watch your last run back")}
   ${divider(56)}
@@ -89,6 +93,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     wordCount: 50,
     customText: null,
     customFile: null,
+    codeLang: null,
     punctuation: false,
     numbers: false,
   };
@@ -146,6 +151,25 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       modeSet = true;
     } else if (a === "--daily" || a === "-d") {
       mode.kind = "daily";
+      modeSet = true;
+    } else if (a === "--code") {
+      const lang = argv[++i];
+      const id = lang ? normalizeCodeLang(lang) : null;
+      if (!id) {
+        console.error(`Invalid --code value: ${lang ?? "(missing)"} (use ${CODE_LANGS.join(", ")})`);
+        process.exit(1);
+      }
+      mode.kind = "code";
+      mode.codeLang = id;
+      modeSet = true;
+    } else if (a.startsWith("--code=")) {
+      const id = normalizeCodeLang(a.split("=").slice(1).join("="));
+      if (!id) {
+        console.error(`Invalid --code value (use ${CODE_LANGS.join(", ")})`);
+        process.exit(1);
+      }
+      mode.kind = "code";
+      mode.codeLang = id;
       modeSet = true;
     } else if (a === "--custom" || a === "-c") {
       const f = argv[++i];
@@ -259,6 +283,11 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
     const text = generateDaily(day);
     return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null };
   }
+  if (mode.kind === "code") {
+    const lang = mode.codeLang ?? "python";
+    const text = generateCode(lang);
+    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null };
+  }
   // custom
   let raw = mode.customText ?? "";
   if (mode.customFile) {
@@ -286,6 +315,7 @@ async function menuLoop(): Promise<void> {
     punctuation: false,
     numbers: false,
     customFile: "",
+    codeLang: "python",
   };
   for (;;) {
     const m = await runMenu(remembered);
@@ -300,6 +330,7 @@ async function menuLoop(): Promise<void> {
       wordCount: m.config.wordCount,
       customText: null,
       customFile: m.config.customFile || null,
+      codeLang: m.config.codeLang || "python",
       punctuation: m.config.punctuation,
       numbers: m.config.numbers,
     };
