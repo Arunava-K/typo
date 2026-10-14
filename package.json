@@ -1,6 +1,6 @@
 {
   "name": "@reading_steiner/typo",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "CLI typing practice & speed test — like Monkeytype/10fastfingers for the terminal",
   "type": "module",
   "bin": {
