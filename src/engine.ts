@@ -7,6 +7,7 @@ import {
   calcBurst,
   calcConsistency,
   formatKey,
+  ghostCharsAt,
   normalizeKey,
   scoreRun,
   scoreZen,
@@ -39,6 +40,7 @@ export interface RunConfig {
   suddenDeath?: boolean; // first mistake ends the run as failed
   noBackspace?: boolean; // corrections disabled, Monkeytype-expert style
   minAcc?: number | null; // fail the run when buffer accuracy drops below this
+  pace?: number | null; // ghost caret racing you at N wpm (display-only, no scoring effect)
 }
 
 export type AfterAction = "quit" | "restart" | "next";
@@ -275,6 +277,7 @@ export function renderChar(
   opts: CaretOpts,
   kind: TokenKind | null = null,
   match = false,
+  ghost = false,
 ): string {
   const t = target[idx]!;
   const isTyped = idx < typed.length;
@@ -307,6 +310,8 @@ export function renderChar(
     else if (t === " ") style = "";
     else style = opts.active ? ansi.white : ansi.gray;
   }
+  // Pace ghost marker (cyan block) — yields to the real cursor on ties.
+  if (ghost && !isCursor) style = ansi.inverse + ansi.cyan;
   return style ? c(ul + style, glyph) : glyph;
 }
 
@@ -602,6 +607,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       ];
       liveCons = calcConsistency(buildWpmTrace(cur, e).raw);
     }
+    // Pace ghost: position + ahead/behind delta (targeted modes only).
+    const paceOn = cfg.pace != null && cfg.zen !== true && startTime !== null;
+    const ghostPos = paceOn ? Math.min(target.length, Math.floor(ghostCharsAt(cfg.pace!, e))) : null;
+    const ghostDelta = paceOn ? Math.round(countCorrect() - ghostCharsAt(cfg.pace!, e)) : null;
     const timeLabel =
       cfg.timeLimitSec != null
         ? startTime === null
@@ -617,7 +626,13 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           : 0;
 
     const barW = Math.min(30, contentWidth - 20);
-    const bar = `${progressBar(progress, barW)} ${c(ansi.gray, `${Math.round(progress * 100)}%`)}`;
+    const ghostStr =
+      ghostDelta == null
+        ? ""
+        : ghostDelta >= 0
+          ? c(ansi.green, `  Δ+${ghostDelta}`)
+          : c(ansi.red, `  Δ${ghostDelta}`);
+    const bar = `${progressBar(progress, barW)} ${c(ansi.gray, `${Math.round(progress * 100)}%`)}${ghostStr}`;
 
     // Build the screen as discrete lines, then center via composeScreen.
     const lines: string[] = [];
@@ -712,6 +727,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
             },
             kindMap ? (kindMap[idx] ?? null) : null,
             matchSet?.has(idx) ?? false,
+            ghostPos != null && idx === ghostPos && idx !== typed.length,
           );
         }
         // cursor past end of text
@@ -792,6 +808,16 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           (assists > 0 ? c(ansi.gray, `   ${assists} assisted`) : ""),
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
       ];
+      if (cfg.pace != null && cfg.zen !== true) {
+        const finalDelta = Math.round(f.correctChars - ghostCharsAt(cfg.pace, finishElapsed));
+        const verdict =
+          finalDelta > 0
+            ? c(ansi.bold + ansi.green, `beat the ${cfg.pace}wpm ghost by ${finalDelta} chars`)
+            : finalDelta < 0
+              ? c(ansi.bold + ansi.red, `lost to the ${cfg.pace}wpm ghost by ${-finalDelta} chars`)
+              : c(ansi.bold + ansi.white, `dead heat with the ${cfg.pace}wpm ghost`);
+        body.push(`${c(ansi.gray, "ghost".padEnd(6))}${verdict}`);
+      }
       if (failReason == null) {
         if (priorBest == null) {
           body.push(c(ansi.gray, `★ first recorded ${cfg.saveMode} run`));

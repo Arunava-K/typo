@@ -28,6 +28,7 @@ export interface MenuConfig {
   suddenDeath: boolean;
   noBackspace: boolean;
   minAcc: number | null;
+  pace: number | null;
 }
 
 export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" };
@@ -250,6 +251,7 @@ export type RowId =
   | "death"
   | "noback"
   | "minacc"
+  | "pace"
   | "start"
   | "history"
   | "quit";
@@ -271,7 +273,7 @@ export function buildRows(mode: ModeName): RowId[] {
   if (mode === "words") rows.push("words");
   if (mode === "custom") rows.push("file");
   if (mode === "code") rows.push("lang");
-  rows.push("punct", "numbers", "death", "noback", "minacc", "start", "history", "quit");
+  rows.push("punct", "numbers", "death", "noback", "minacc", "pace", "start", "history", "quit");
   return rows;
 }
 
@@ -337,6 +339,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     wordCount: snap(WORD_OPTS, defaults.wordCount),
     codeLang: (CODE_LANGS as readonly string[]).includes(defaults.codeLang) ? defaults.codeLang : "python",
     minAcc: [null, 80, 85, 90, 95].includes(defaults.minAcc) ? defaults.minAcc : null,
+    pace: [null, 40, 60, 80, 100, 120].includes(defaults.pace) ? defaults.pace : null,
   };
   let rows = buildRows(cfg.mode);
   let sel = 0;
@@ -376,6 +379,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return onOffPill(cfg.noBackspace);
       case "minacc":
         return cycler(cfg.minAcc == null ? "off" : `${cfg.minAcc}%`);
+      case "pace":
+        return cycler(cfg.pace == null ? "off" : `${cfg.pace}wpm`);
       case "start":
         return c(ansi.bold + ansi.green, "▶  start test");
       case "history":
@@ -422,6 +427,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return `${ic("⌫")}no backspace`;
       case "minacc":
         return `${ic("%")}min accuracy`;
+      case "pace":
+        return `${ic("»")}pace ghost`;
       case "start":
         return "";
       case "history":
@@ -593,6 +600,9 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       case "minacc":
         cfg.minAcc = cycle([null, 80, 85, 90, 95] as (number | null)[], cfg.minAcc, dir);
         break;
+      case "pace":
+        cfg.pace = cycle([null, 40, 60, 80, 100, 120] as (number | null)[], cfg.pace, dir);
+        break;
       default:
         break;
     }
@@ -683,6 +693,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         case "death":
         case "noback":
         case "minacc":
+        case "pace":
           adjust(id, 1);
           draw();
           break;

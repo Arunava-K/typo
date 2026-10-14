@@ -129,6 +129,7 @@ under the panel.
 | `--sudden-death` | First mistake ends the run as failed |
 | `--no-backspace` | Corrections disabled, expert style |
 | `--min-acc <n>` | Fail the run below n% accuracy (10-char grace) |
+| `--pace <wpm>` | Race a ghost caret at n wpm (5–300) |
 | `--history` | Show past results, PBs, averages & activity |
 | `--history --mode <m>` | Filter history by mode, e.g. `"time"` (repeatable) |
 | `--history --last <n>` | Show last n runs (default 10) |

@@ -217,6 +217,17 @@ export function belowMinAcc(correctChars: number, typedLen: number, minAcc: numb
   return (correctChars / typedLen) * 100 < minAcc;
 }
 
+// --- Pace ghost (Task #16) ---
+
+/**
+ * Characters a pace-WPM typist covers in elapsedSec (5 chars = 1 word).
+ * Pure so ghost math is unit-testable.
+ */
+export function ghostCharsAt(paceWpm: number, elapsedSec: number): number {
+  if (elapsedSec <= 0 || paceWpm <= 0) return 0;
+  return (paceWpm * elapsedSec) / 12;
+}
+
 // --- Per-key stats (Task #2) ---
 
 /** One typed keystroke attributed to its expected char. */

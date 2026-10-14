@@ -31,6 +31,7 @@ interface Mode {
   suddenDeath: boolean;
   noBackspace: boolean;
   minAcc: number | null;
+  pace: number | null;
   punctuation: boolean;
   numbers: boolean;
 }
@@ -62,6 +63,7 @@ ${H("Modifiers:")}
   ${flag("--sudden-death")}     ${D("first mistake ends the run as failed  ✗")}
   ${flag("--no-backspace")}     ${D("corrections disabled, expert style")}
   ${flag("--min-acc <n>")}      ${D("fail the run below n% accuracy (10-char grace)")}
+  ${flag("--pace <wpm>")}        ${D("race a ghost caret at n wpm  »")}
 
 ${H("Progress:")}
   ${flag("--history")}          ${D("show past results, PBs, averages & activity")}
@@ -105,6 +107,7 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     suddenDeath: false,
     noBackspace: false,
     minAcc: null,
+    pace: null,
     punctuation: false,
     numbers: false,
   };
@@ -177,6 +180,13 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
         process.exit(1);
       }
       mode.minAcc = v;
+    } else if (a === "--pace") {
+      const v = Number(argv[++i]);
+      if (!Number.isFinite(v) || v < 5 || v > 300) {
+        console.error(`Invalid --pace value: ${argv[i]} (use 5–300 wpm)`);
+        process.exit(1);
+      }
+      mode.pace = Math.round(v);
     } else if (a === "--code") {
       const lang = argv[++i];
       const id = lang ? normalizeCodeLang(lang) : null;
@@ -358,6 +368,7 @@ async function menuLoop(): Promise<void> {
     suddenDeath: false,
     noBackspace: false,
     minAcc: null,
+    pace: null,
   };
   for (;;) {
     const m = await runMenu(remembered);
@@ -376,6 +387,7 @@ async function menuLoop(): Promise<void> {
       suddenDeath: m.config.suddenDeath,
       noBackspace: m.config.noBackspace,
       minAcc: m.config.minAcc,
+      pace: m.config.pace,
       punctuation: m.config.punctuation,
       numbers: m.config.numbers,
     };
@@ -392,6 +404,7 @@ async function menuLoop(): Promise<void> {
         suddenDeath: mode.suddenDeath,
         noBackspace: mode.noBackspace,
         minAcc: mode.minAcc,
+        pace: mode.pace,
       };
       const action = await runTest(cfg);
       if (action === "quit") break;
@@ -506,6 +519,7 @@ async function main(): Promise<void> {
       suddenDeath: mode.suddenDeath,
       noBackspace: mode.noBackspace,
       minAcc: mode.minAcc,
+      pace: mode.pace,
     };
     const action = await runTest(cfg);
     if (action === "quit") {
