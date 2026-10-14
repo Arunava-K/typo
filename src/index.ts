@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, generateDaily, generateSentences, dailyDateStr, normalizeCustom } from "./generator.js";
 import { CODE_LANGS, generateCode, normalizeCodeLang, type CodeLang } from "./code.js";
+import { generateTricky } from "./drill.js";
 import {
   exportCsv,
   exportJson,
@@ -22,7 +23,7 @@ const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
 
 interface Mode {
-  kind: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen" | "sentences";
+  kind: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen" | "sentences" | "tricky";
   timeSec: number;
   wordCount: number;
   sentCount: number;
@@ -57,6 +58,7 @@ ${H("Modes:")} ${D("(default: --time 30)")}
   ${flag("--code <lang>")}       ${D("code snippet test (python, javascript, go, rust…)  <>")}
   ${flag("--zen")}             ${D("free typing, no prompt — esc finishes  ∞")}
   ${flag("--sentences [n]")}     ${D("full-sentence test, default 5  ¶")}
+  ${flag("--tricky-keys")}       ${D("drill your worst keys + mistyped words  ◎")}
   ${flag("--custom <file>")}    ${D("practice with text from a file  ✎")}
   ${flag('--text "..."')}       ${D("practice with inline custom text")}
 
@@ -95,6 +97,7 @@ ${H("Examples:")}
   ${D("$")} typo --zen                ${D("# free typing")}
   ${D("$")} typo --sentences 10       ${D("# 10 sentences")}
   ${D("$")} typo --words 50 --time 60 ${D("# 50 words or 60s, whichever first")}
+  ${D("$")} typo --tricky-keys       ${D("# practice your weak spots")}
   ${D("$")} typo --custom essay.txt   ${D("# custom text from file")}
   ${D("$")} typo --replay             ${D("# watch your last run back")}
   ${divider(56)}
@@ -223,6 +226,9 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
         process.exit(1);
       }
       mode.pace = Math.round(v);
+    } else if (a === "--tricky-keys" || a === "--tricky") {
+      mode.kind = "tricky";
+      modeSet = true;
     } else if (a === "--code") {
       const lang = argv[++i];
       const id = lang ? normalizeCodeLang(lang) : null;
@@ -386,6 +392,10 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
   if (mode.kind === "sentences") {
     const text = generateSentences(mode.sentCount);
     return { text, label: `sentences ${mode.sentCount}${ms.label}`, saveMode: `sentences ${mode.sentCount}${ms.save}`, timeLimit: null, codeLang: null, zen: false };
+  }
+  if (mode.kind === "tricky") {
+    const { text, keys } = generateTricky(await loadHistory());
+    return { text, label: `tricky (${keys.join("")})${ms.label}`, saveMode: `tricky${ms.save}`, timeLimit: null, codeLang: null, zen: false };
   }
   // custom
   let raw = mode.customText ?? "";
