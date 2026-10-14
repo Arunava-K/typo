@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { badges, streaks, totalXp, xpProgress } from "./progression.js";
 import { sparkline } from "./stats.js";
+import { ansi, c } from "./ui.js";
 
 export interface HistoryEntry {
   date: string; // ISO
@@ -472,21 +473,24 @@ export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): str
   const last10 = lastNAvg(rows, 10);
   const tot = totals(rows);
   const cells = activityCells(rows, 14, filter.now ?? Date.now());
-  const activeDays = cells.filter((c) => c > 0).length;
+  const activeDays = cells.filter((cc) => cc > 0).length;
+  const L = (t: string): string => c(ansi.gray, t);
+  const N = (t: string): string => c(ansi.bold + ansi.white, t);
+  const Y = (t: string): string => c(ansi.bold + ansi.yellow, t);
   const lines: string[] = [];
   if (filter.modes && filter.modes.length > 0) {
-    lines.push(`Filter: ${filter.modes.join(", ")} (${rows.length} run${rows.length === 1 ? "" : "s"})`);
+    lines.push(L(`Filter: ${filter.modes.join(", ")} (${rows.length} run${rows.length === 1 ? "" : "s"})`));
   }
   lines.push(
-    `Tests: ${rows.length}   Best: ${best.toFixed(1)} wpm   Avg: ${avg.toFixed(1)} wpm` +
-      (Number.isFinite(avgCons) ? `   Cons: ${avgCons.toFixed(1)}%` : ""),
+    `${L("Tests:")} ${N(String(rows.length))}   ${L("Best:")} ${Y(`${best.toFixed(1)} wpm`)}   ${L("Avg:")} ${N(`${avg.toFixed(1)} wpm`)}` +
+      (Number.isFinite(avgCons) ? `   ${L("Cons:")} ${N(`${avgCons.toFixed(1)}%`)}` : ""),
   );
   lines.push(
-    `Last ${last10.runs}: ${last10.wpm.toFixed(1)} wpm   ${last10.acc.toFixed(1)}% acc` +
-      (Number.isFinite(last10.cons) ? `   ${last10.cons.toFixed(1)}% cons` : ""),
+    `${L(`Last ${last10.runs}:`)} ${Y(`${last10.wpm.toFixed(1)} wpm`)}   ${N(`${last10.acc.toFixed(1)}%`)} ${L("acc")}` +
+      (Number.isFinite(last10.cons) ? `   ${N(`${last10.cons.toFixed(1)}%`)} ${L("cons")}` : ""),
   );
   lines.push(
-    `Total: ${fmtDuration(tot.seconds)} typing   ${tot.words.toLocaleString("en-US")} words   Activity 14d: ${activityBar(cells)} (${activeDays}/14 days)`,
+    `${L("Total:")} ${N(fmtDuration(tot.seconds))} ${L("typing")}   ${N(tot.words.toLocaleString("en-US"))} ${L("words")}   ${L("Activity 14d:")} ${c(ansi.cyan, activityBar(cells))} ${L(`(${activeDays}/14 days)`)}`,
   );
   // Progression is global (full history), not per-filter — like an account.
   const nowMs = filter.now ?? Date.now();
@@ -495,39 +499,40 @@ export function summarize(hist: HistoryEntry[], filter: HistoryFilter = {}): str
   const st = streaks(hist, nowMs);
   const bd = badges(hist, nowMs);
   const earned = bd.filter((b) => b.earned);
+  const streakTxt = st.current > 0 ? `${st.current} day${st.current === 1 ? "" : "s"} streak` : "—";
   lines.push(
-    `Level ${prog.level} (${xp.toLocaleString("en-US")} XP · ${(prog.need - prog.into).toLocaleString("en-US")} to L${prog.level + 1})   Streak: ${st.current > 0 ? `${st.current} day${st.current === 1 ? "" : "s"}` : "—"} (best ${st.best})`,
+    `${L("Level")} ${Y(String(prog.level))} ${L(`(${xp.toLocaleString("en-US")} XP · ${(prog.need - prog.into).toLocaleString("en-US")} to L${prog.level + 1})`)}   ${L("Streak:")} ${N(streakTxt)} ${L(`(best ${st.best})`)}`,
   );
   lines.push(
-    `Badges (${earned.length}/${bd.length}): ${earned.length > 0 ? earned.map((b) => b.name).join(" · ") : "—"}` +
-      (earned.length < bd.length ? `   (+${bd.length - earned.length} locked)` : ""),
+    `${L(`Badges (${earned.length}/${bd.length}):`)} ${earned.length > 0 ? earned.map((b) => c(ansi.cyan, b.name)).join(L(" · ")) : L("—")}` +
+      (earned.length < bd.length ? L(`   (+${bd.length - earned.length} locked)`) : ""),
   );
-  lines.push(`Trend (wpm, oldest → newest): ${sparkline(rows.map((h) => h.wpm), 40)}`);
+  lines.push(`${L("Trend (wpm, oldest → newest):")} ${c(ansi.cyan, sparkline(rows.map((h) => h.wpm), 40))}`);
   const bins = wpmHistogram(rows.map((h) => h.wpm));
   const maxBin = Math.max(...bins.map((b) => b.count), 1);
-  lines.push(`Histogram (${rows.length} run${rows.length === 1 ? "" : "s"}):`);
+  lines.push(L(`Histogram (${rows.length} run${rows.length === 1 ? "" : "s"}):`));
   for (const b of bins) {
     lines.push(
-      `  ${`${b.lo.toFixed(0)}-${b.hi.toFixed(0)}`.padEnd(9)} ${histBar(b.count, maxBin).padEnd(20)} ${b.count}`,
+      `  ${L(`${b.lo.toFixed(0)}-${b.hi.toFixed(0)}`.padEnd(9))} ${c(ansi.magenta, histBar(b.count, maxBin).padEnd(20))} ${L(String(b.count))}`,
     );
   }
   const pbs = pbMatrix(rows);
-  lines.push(`PBs (${pbs.length} mode${pbs.length === 1 ? "" : "s"}):`);
+  lines.push(L(`✦ PBs (${pbs.length} mode${pbs.length === 1 ? "" : "s"}):`));
   for (const p of pbs) {
     lines.push(
-      `  ${p.mode.padEnd(10)} ${p.wpm.toFixed(1).padStart(5)} wpm  ${p.acc.toFixed(1).padStart(5)}%  x${p.runs}  ${p.date.slice(0, 10)}`,
+      `  ${c(ansi.white, p.mode.padEnd(10))} ${Y(p.wpm.toFixed(1).padStart(5))} ${L("wpm")}  ${N(p.acc.toFixed(1).padStart(5) + "%")}  ${L(`x${p.runs}  ${p.date.slice(0, 10)}`)}`,
     );
   }
   lines.push("");
-  lines.push("  date                  mode        wpm    raw    acc   cons");
-  lines.push("  ─────────────────────────────────────────────────────────");
+  lines.push(L("  date                  mode        wpm    raw    acc   cons"));
+  lines.push(L("  ─────────────────────────────────────────────────────────"));
   for (const h of recent) {
     const d = h.date.slice(0, 16).replace("T", " ");
     const cons = h.consistency != null ? `${h.consistency.toFixed(1).padStart(5)}%` : "    — ";
     lines.push(
-      `  ${d}   ${h.mode.padEnd(10)} ${h.wpm.toFixed(1).padStart(5)} ${h.raw
+      `  ${L(d)}   ${c(ansi.white, h.mode.padEnd(10))} ${Y(h.wpm.toFixed(1).padStart(5))} ${N(h.raw
         .toFixed(1)
-        .padStart(5)}  ${h.acc.toFixed(1).padStart(5)}% ${cons}`,
+        .padStart(5))}  ${N(`${h.acc.toFixed(1).padStart(5)}%`)} ${L(cons)}`,
     );
   }
   return lines.join("\n");

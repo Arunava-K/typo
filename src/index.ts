@@ -15,7 +15,7 @@ import {
 } from "./history.js";
 import { runMenu, type MenuConfig } from "./menu.js";
 import { runReplay } from "./replay.js";
-import { ansi, c } from "./ui.js";
+import { ansi, c, divider, keycap, logo } from "./ui.js";
 
 const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
@@ -31,50 +31,54 @@ interface Mode {
 }
 
 function printHelp(): void {
-  console.log(`${c(ansi.bold + ansi.cyan, "typo")} — CLI typing practice & speed test
-${c(ansi.gray, "like Monkeytype / 10fastfingers, but in your terminal.")}
+  const H = (t: string): string => c(ansi.bold + ansi.white, t);
+  const D = (t: string): string => c(ansi.gray, t);
+  const flag = (t: string): string => c(ansi.bold + ansi.cyan, t);
+  console.log(`${logo()}  ${D("·  CLI typing practice & speed test")}
+  ${D("like Monkeytype / 10fastfingers, but in your terminal. Zero dependencies.")}
 
-${c(ansi.bold, "Usage:")}
-  typo                open the interactive setup menu (no flags needed)
-  typo [options]      jump straight into a test
+${H("Usage:")}
+  ${c(ansi.bold + ansi.green, "typo")}                ${D("open the interactive setup menu (no flags needed)")}
+  ${c(ansi.bold + ansi.green, "typo")} ${flag("[options]")}      ${D("jump straight into a test")}
 
-${c(ansi.bold, "Modes:")} ${c(ansi.gray, "(default: --time 30)")}
-  --time <sec>       timed test (e.g. 15, 30, 60, 120)
-  --words <n>        fixed word count test (e.g. 10, 25, 50, 100)
-  --quote            random quote / sentence
-  --daily            shared daily text (same all day, everywhere)
-  --custom <file>    practice with text from a file
-  --text "..."       practice with inline custom text
+${H("Modes:")} ${D("(default: --time 30)")}
+  ${flag("--time <sec>")}       ${D("timed test (e.g. 15, 30, 60, 120)")}
+  ${flag("--words <n>")}        ${D("fixed word count test (e.g. 10, 25, 50, 100)")}
+  ${flag("--quote")}            ${D("random quote / sentence  ❝")}
+  ${flag("--daily")}            ${D("shared daily text (same all day, everywhere)  ◉")}
+  ${flag("--custom <file>")}    ${D("practice with text from a file  ✎")}
+  ${flag('--text "..."')}       ${D("practice with inline custom text")}
 
-${c(ansi.bold, "Modifiers:")}
-  -p, --punctuation  include punctuation + capitals (words/time modes)
-  --numbers          include numbers (words/time modes)
+${H("Modifiers:")}
+  ${flag("-p, --punctuation")}  ${D("include punctuation + capitals (words/time modes)")}
+  ${flag("--numbers")}          ${D("include numbers (words/time modes)")}
 
-${c(ansi.bold, "Other:")}
-  --history          show past results, PBs, averages & activity
-  --history --mode <m>   filter history by mode, e.g. "time" (repeatable)
-  --history --last <n>   show last n runs (default 10)
-  --export <csv|json>  print history to stdout (redirect to a file)
-  --import <file>      merge exported runs back in (dedupes)
-  --replay           replay your last run keystroke-by-keystroke
-  --debug-keys       press keys to see their codes (diagnose shortcuts)
-  -h, --help         show this help
-  --version          show version
+${H("Progress:")}
+  ${flag("--history")}          ${D("show past results, PBs, averages & activity")}
+  ${flag("--history --mode <m>")}   ${D('filter history by mode, e.g. "time" (repeatable)')}
+  ${flag("--history --last <n>")}   ${D("show last n runs (default 10)")}
+  ${flag("--export <csv|json>")}  ${D("print history to stdout (redirect to a file)")}
+  ${flag("--import <file>")}      ${D("merge exported runs back in (dedupes)")}
+  ${flag("--replay")}           ${D("replay your last run keystroke-by-keystroke  ▶")}
+  ${flag("--debug-keys")}       ${D("press keys to see their codes (diagnose shortcuts)")}
+  ${flag("-h, --help")}         ${D("show this help")}
+  ${flag("--version")}          ${D("show version")}
 
-${c(ansi.bold, "Keys while typing:")}
-  start typing to begin · esc quit · backspace fix · ctrl+w / ctrl+backspace delete word
+${H("Keys while typing:")}
+  ${keycap("type")} ${D("begin")}  ${D("·")}  ${keycap("esc")} ${D("quit")}  ${D("·")}  ${keycap("⌫")} ${D("fix")}  ${D("·")}  ${keycap("ctrl+w")} ${D("delete word")}
 
-${c(ansi.bold, "Keys on results:")}
-  r retry · tab/n next · q/esc quit
+${H("Keys on results:")}
+  ${keycap("r")} ${D("retry")}  ${D("·")}  ${keycap("tab/n")} ${D("next")}  ${D("·")}  ${keycap("q/esc")} ${D("quit")}
 
-${c(ansi.bold, "Examples:")}
-  typo                      ${c(ansi.gray, "# 30s test")}
-  typo --time 60 -p         ${c(ansi.gray, "# 60s with punctuation")}
-  typo --words 50           ${c(ansi.gray, "# 50 words")}
-  typo --quote              ${c(ansi.gray, "# random quote")}
-  typo --daily              ${c(ansi.gray, "# today's shared text")}
-  typo --custom essay.txt   ${c(ansi.gray, "# custom text from file")}
-  typo --replay             ${c(ansi.gray, "# watch your last run back")}
+${H("Examples:")}
+  ${D("$")} typo                      ${D("# interactive setup menu")}
+  ${D("$")} typo --time 60 -p         ${D("# 60s with punctuation")}
+  ${D("$")} typo --words 50           ${D("# 50 words")}
+  ${D("$")} typo --quote              ${D("# random quote")}
+  ${D("$")} typo --daily              ${D("# today's shared text")}
+  ${D("$")} typo --custom essay.txt   ${D("# custom text from file")}
+  ${D("$")} typo --replay             ${D("# watch your last run back")}
+  ${divider(56)}
 `);
 }
 

@@ -1,4 +1,4 @@
-import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
+import { ansi, c, keycap, logo, padCenter, progressBar, stripAnsi, termHeight, termWidth } from "./ui.js";
 import {
   accumulateKeyStats,
   buildWpmTrace,
@@ -159,16 +159,19 @@ export function currentWordRange(target: string, pos: number): { start: number; 
 
 /**
  * Frame content lines in a rounded box. Widths are measured by visible
- * characters so ANSI colors don't break alignment. Exported for tests.
+ * characters so ANSI colors don't break alignment. `pad` is the horizontal
+ * breathing room inside the borders (default 2; the setup menu uses 3).
+ * Exported for tests.
  */
-export function buildBox(content: string[]): string[] {
+export function buildBox(content: string[], pad = 2): string[] {
   const widths = content.map((l) => stripAnsi(l).length);
   const inner = widths.length > 0 ? Math.max(...widths) : 0;
-  const bar = "─".repeat(inner + 4);
+  const sides = " ".repeat(pad);
+  const bar = "─".repeat(inner + pad * 2);
   const out = [c(ansi.cyan, `╭${bar}╮`)];
   for (const ln of content) {
     out.push(
-      c(ansi.cyan, "│") + "  " + ln + " ".repeat(inner - stripAnsi(ln).length) + "  " + c(ansi.cyan, "│"),
+      c(ansi.cyan, "│") + sides + ln + " ".repeat(inner - stripAnsi(ln).length) + sides + c(ansi.cyan, "│"),
     );
   }
   out.push(c(ansi.cyan, `╰${bar}╯`));
@@ -486,24 +489,23 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           : 0;
 
     const barW = Math.min(30, contentWidth - 20);
-    const filled = Math.round(progress * barW);
-    const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barW - filled));
+    const bar = `${progressBar(progress, barW)} ${c(ansi.gray, `${Math.round(progress * 100)}%`)}`;
 
     // Build the screen as discrete lines, then center via composeScreen.
     const lines: string[] = [];
-    // header
+    // header — wordmark + mode + live stats
     lines.push(
-      c(ansi.bold + ansi.cyan, "typo") +
-        c(ansi.gray, `  │  ${cfg.modeLabel}  │  ⏱ ${timeLabel}  │  `) +
-        c(ansi.yellow, `${s.wpm.toFixed(0)} wpm`) +
-        c(ansi.gray, "  │  ") +
-        c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}% acc`) +
-        c(ansi.gray, "  │  ") +
+      logo() +
+        c(ansi.gray, `  ·  ${cfg.modeLabel}  ·  ◔ ${timeLabel}  ·  `) +
+        c(ansi.bold + ansi.yellow, `${s.wpm.toFixed(0)} wpm`) +
+        c(ansi.gray, "  ·  ") +
+        c(s.acc >= 95 ? ansi.green : s.acc >= 85 ? ansi.yellow : ansi.red, `${s.acc.toFixed(1)}%`) +
+        c(ansi.gray, "  ·  ") +
         (burstReady ? c(ansi.magenta, `⚡${burst.toFixed(0)}`) : c(ansi.gray, "⚡—")) +
-        c(ansi.gray, "  │  ") +
+        c(ansi.gray, "  ·  ") +
         (liveCons != null ? c(ansi.white, `${liveCons.toFixed(0)}% cons`) : c(ansi.gray, "— cons")),
     );
-    lines.push(c(ansi.gray, bar));
+    lines.push(bar);
     lines.push("");
 
     if (!finished) {
@@ -553,7 +555,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       }
       if (end < textLines.length) lines.push(c(ansi.gray, `… +${textLines.length - end} more lines`));
       lines.push("");
-      lines.push(c(ansi.gray, "esc quit   ·   ctrl+w / ctrl+backspace delete word   ·   backspace fix"));
+      lines.push(
+        `${keycap("esc")} ${c(ansi.gray, "quit")}   ${c(ansi.gray, "·")}   ${keycap("ctrl+w")} ${c(ansi.gray, "word")}   ${c(ansi.gray, "·")}   ${keycap("⌫")} ${c(ansi.gray, "fix")}`,
+      );
     } else {
       // results — framed panel
       const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
@@ -608,15 +612,15 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       if (priorBest == null) {
         body.push(c(ansi.gray, `★ first recorded ${cfg.saveMode} run`));
       } else if (f.wpm > priorBest) {
-        body.push(c(ansi.bold + ansi.yellow, `★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)})`));
+        body.push(c(ansi.bold + ansi.yellow, `✦ ★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)}) ★ ✦`));
       }
       if (resultSaved) body.push(c(ansi.gray, `saved to ~/.typo/history.json${xpNote}`));
       body.push("");
       body.push(
-        c(ansi.cyan, "[r]") + c(ansi.gray, " retry   ") + c(ansi.cyan, "[tab/n]") + c(ansi.gray, " next   ") + c(ansi.cyan, "[q/esc]") + c(ansi.gray, " quit"),
+        `${keycap("r")} ${c(ansi.gray, "retry")}   ${keycap("tab/n")} ${c(ansi.gray, "next")}   ${keycap("q/esc")} ${c(ansi.gray, "quit")}`,
       );
       const innerW = Math.max(...body.map((l) => stripAnsi(l).length));
-      body.unshift(padCenter(c(ansi.bold + ansi.green, "done!"), innerW));
+      body.unshift(padCenter(c(ansi.bold + ansi.green, "✦ done ✦"), innerW));
       for (const bl of buildBox(body)) lines.push(bl);
     }
 

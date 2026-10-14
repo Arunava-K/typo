@@ -13,7 +13,7 @@ import {
   textWindowSize,
 } from "./engine.js";
 import { loadLastReplay, type ReplayEvent } from "./history.js";
-import { ansi, c, termHeight, termWidth } from "./ui.js";
+import { ansi, c, keycap, logo, progressBar, termHeight, termWidth } from "./ui.js";
 
 /** Apply one recorded event to the replay buffer (pure, unit-testable). */
 export function applyReplayEvent(typed: string, target: string, ev: ReplayEvent): string {
@@ -73,14 +73,13 @@ export async function runReplay(): Promise<void> {
     const speed = SPEEDS[speedIdx]!;
     const lines: string[] = [];
     lines.push(
-      c(ansi.bold + ansi.cyan, "typo") +
-        c(ansi.gray, `  │  replay ${modeLabel}  │  ${paused ? "⏸" : "▶"} ${speed}x  │  `) +
+      logo() +
+        c(ansi.gray, `  ·  replay ${modeLabel}  ·  ${paused ? "⏸ paused" : "▶ playing"} ${speed}x  ·  `) +
         c(ansi.gray, `${(vt / 1000).toFixed(1)}s / ${(duration / 1000).toFixed(1)}s`),
     );
     const barW = Math.min(30, contentWidth - 20);
     const progress = duration > 0 ? Math.min(1, vt / duration) : 1;
-    const filled = Math.round(progress * barW);
-    lines.push(c(ansi.gray, "█".repeat(filled) + "░".repeat(Math.max(0, barW - filled))));
+    lines.push(progressBar(progress, barW));
     lines.push("");
 
     const word = currentWordRange(target, Math.min(typed.length, target.length));
@@ -119,13 +118,15 @@ export async function runReplay(): Promise<void> {
     lines.push("");
     if (done) {
       for (const bl of buildBox([
-        c(ansi.bold + ansi.green, "replay finished"),
-        c(ansi.gray, "r restart   ·   q/esc quit"),
+        c(ansi.bold + ansi.green, "✦ replay finished ✦"),
+        `${keycap("r")} ${c(ansi.gray, "restart")}   ${c(ansi.gray, "·")}   ${keycap("q/esc")} ${c(ansi.gray, "quit")}`,
       ])) {
         lines.push(bl);
       }
     } else {
-      lines.push(c(ansi.gray, "space pause   ·   +/− speed   ·   r restart   ·   q quit"));
+      lines.push(
+        `${keycap("space")} ${c(ansi.gray, "pause")}   ${c(ansi.gray, "·")}   ${keycap("+/−")} ${c(ansi.gray, "speed")}   ${c(ansi.gray, "·")}   ${keycap("r")} ${c(ansi.gray, "restart")}   ${c(ansi.gray, "·")}   ${keycap("q")} ${c(ansi.gray, "quit")}`,
+      );
     }
     stdout.write(composeScreen(lines, vpCols, vpRows, contentWidth));
   }

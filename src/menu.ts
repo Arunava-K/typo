@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import { ansi, c, padCenter, stripAnsi, termHeight, termWidth } from "./ui.js";
+import { ansi, c, cycler, divider, keycap, logo, onOffPill, padCenter, stripAnsi, termHeight, termWidth, xpBar } from "./ui.js";
 import { buildBox, composeScreen, deleteLastWord, enterFullscreen, isWordDeleteKey, leaveFullscreen } from "./engine.js";
 import {
   activityBar,
@@ -245,6 +245,16 @@ export type RowId =
   | "history"
   | "quit";
 
+/** History viewer tabs — one screen per topic so nothing overflows. */
+const HIST_TABS = ["overview", "trends", "bests", "runs"] as const;
+type HistTab = (typeof HIST_TABS)[number];
+const HIST_TAB_CARDS: Record<HistTab, string[]> = {
+  overview: ["overview", "progression"],
+  trends: ["activity", "distribution"],
+  bests: ["best per mode"],
+  runs: ["recent runs"],
+};
+
 /** Rows shown for each mode — only relevant options appear. */
 export function buildRows(mode: ModeName): RowId[] {
   const rows: RowId[] = ["mode"];
@@ -290,6 +300,14 @@ const MODE_LABEL: Record<ModeName, string> = {
   daily: "daily",
 };
 
+const MODE_ICON: Record<ModeName, string> = {
+  time: "◷",
+  words: "≡",
+  quote: "❝",
+  custom: "✎",
+  daily: "◉",
+};
+
 export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.error("typo needs an interactive terminal (TTY).");
@@ -311,53 +329,71 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
   let message = "";
   let screen: "menu" | "history" = "menu";
   let histEntries: HistoryEntry[] = [];
-
-  function onOff(v: boolean): string {
-    return v ? c(ansi.green, "on") : c(ansi.gray, "off");
-  }
+  let histTab = 0;
+  let histScroll = 0;
+  let histBudget = 10;
+  /** Two short status lines (kept ≤ body width so the box stays tight). */
+  let profileLines: string[] = [];
 
   function rowValue(id: RowId): string {
     switch (id) {
       case "mode":
-        return c(ansi.bold + ansi.yellow, `< ${MODE_LABEL[cfg.mode]} >`);
+        return cycler(MODE_LABEL[cfg.mode]);
       case "time":
-        return c(ansi.bold + ansi.yellow, `< ${cfg.timeSec}s >`);
+        return cycler(`${cfg.timeSec}s`);
       case "words":
-        return c(ansi.bold + ansi.yellow, `< ${cfg.wordCount} >`);
+        return cycler(String(cfg.wordCount));
       case "file":
         if (editing) return c(ansi.cyan, "[") + editBuf + c(ansi.inverse, " ") + c(ansi.cyan, "]");
-        return cfg.customFile ? c(ansi.white, `[${cfg.customFile}]`) : c(ansi.gray, "[no file yet]");
+        return cfg.customFile
+          ? c(ansi.white, cfg.customFile)
+          : c(ansi.gray, "○ no file yet — select to add one");
       case "punct":
-        return onOff(cfg.punctuation);
+        return onOffPill(cfg.punctuation);
       case "numbers":
-        return onOff(cfg.numbers);
+        return onOffPill(cfg.numbers);
       case "start":
-        return c(ansi.bold + ansi.green, "start test →");
+        return c(ansi.bold + ansi.green, "▶  start test");
       case "history":
-        return c(ansi.cyan, "view");
+        return c(ansi.cyan, "↺  history");
       case "quit":
-        return c(ansi.gray, "quit");
+        return c(ansi.gray, "⎋  quit");
     }
   }
 
+  /**
+   * Single icon prefix per option row — the icon lives here OR in the
+   * value, never both (double icons made the old menu look cluttered).
+   */
+  /**
+   * Icons mirror Phosphor's picks for these concepts (Play, Hash, TextAa,
+   * Pencil, Quotes, ClockCounterClockwise…), using the nearest glyph the
+   * terminal can render. Real Phosphor SVGs can't draw in a terminal, and
+   * Nerd-Font codepoints would be tofu for users without patched fonts —
+   * so geometric text glyphs only, no emoji.
+   *
+   * The icon field is always exactly 2 columns (`Aa` is naturally wide,
+   * the rest are padded) so the option names left-align with each other.
+   */
   function rowLabel(id: RowId): string {
+    const ic = (g: string): string => `${g.padEnd(2)} `;
     switch (id) {
       case "mode":
-        return "mode";
+        return `${ic(MODE_ICON[cfg.mode])}mode`;
       case "time":
-        return "duration";
+        return `${ic("◔")}duration`;
       case "words":
-        return "words";
+        return `${ic("≡")}words`;
       case "file":
-        return "file";
+        return `${ic("✎")}file`;
       case "punct":
-        return "punctuation";
+        return `${ic("Aa")}punctuation`;
       case "numbers":
-        return "numbers";
+        return `${ic("#")}numbers`;
       case "start":
         return "";
       case "history":
-        return "history";
+        return "";
       case "quit":
         return "";
     }
@@ -369,7 +405,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     const contentWidth = Math.min(vpCols, 60);
 
     if (screen === "history") {
-      const foot = c(ansi.gray, "press any key to go back");
+      const foot = `${keycap("←→/tab")} ${c(ansi.gray, "tabs")}  ${c(ansi.gray, "·")}  ${keycap("↑↓")} ${c(ansi.gray, "scroll")}  ${c(ansi.gray, "·")}  ${keycap("esc")} ${c(ansi.gray, "back")}`;
       if (histEntries.length === 0) {
         const w = Math.min(contentWidth, vpCols) - 4;
         const box = buildTitledBox(
@@ -382,29 +418,13 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return;
       }
 
+      // Tabbed viewer: exactly one topic per screen, windowed to the
+      // viewport so the top can never scroll off (see screenshot #1).
+      const tab = HIST_TABS[histTab]!;
       const availW = Math.max(40, Math.min(vpCols - 4, 92));
-      const maxBody = Math.max(6, vpRows - 2);
-      const heightOf = (cs: HistCard[]): number =>
-        cs.reduce((n, cd) => n + cd.lines.length + 2, 0) + Math.max(0, cs.length - 1);
-
-      // Start with the minimum recent rows, shed whole sections until it fits,
-      // then spend any leftover height on more recent rows.
-      const MIN_RECENT = 3;
-      const MAX_RECENT = 10;
-      let cards = buildHistoryCards(histEntries, MIN_RECENT);
-      const droppable = ["distribution", "best per mode", "activity"];
-      const dropped: string[] = [];
-      while (heightOf(cards) > maxBody) {
-        const drop = droppable.shift();
-        if (!drop) break;
-        cards = cards.filter((cd) => cd.title !== drop);
-        dropped.push(drop);
-      }
-      const room = maxBody - heightOf(cards);
-      const grow = Math.min(room, MAX_RECENT - MIN_RECENT, Math.max(0, histEntries.length - MIN_RECENT));
-      if (grow > 0) {
-        cards = buildHistoryCards(histEntries, MIN_RECENT + grow).filter((cd) => !dropped.includes(cd.title));
-      }
+      const allCards = buildHistoryCards(histEntries, histEntries.length);
+      const wanted = HIST_TAB_CARDS[tab];
+      const cards = allCards.filter((cd) => wanted.includes(cd.title));
 
       let innerW = 0;
       for (const cd of cards) {
@@ -413,48 +433,98 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       }
       innerW = Math.max(20, Math.min(innerW, availW - 4));
 
-      const lines: string[] = [];
+      const full: string[] = [];
       cards.forEach((cd, i) => {
-        if (i > 0) lines.push("");
-        lines.push(...buildTitledBox(cd.title, cd.lines, innerW));
+        if (i > 0) full.push("");
+        full.push(...buildTitledBox(cd.title, cd.lines, innerW));
       });
-      lines.push("");
-      if (dropped.length > 0) {
-        lines.push(c(ansi.gray, `+${dropped.length} section${dropped.length === 1 ? "" : "s"} hidden — enlarge the terminal`));
+
+      const titleLine = `${c(ansi.bold + ansi.white, "history")}  ${c(ansi.gray, `·  ${histEntries.length} run${histEntries.length === 1 ? "" : "s"}`)}`;
+      const tabBar = HIST_TABS.map((t, i) =>
+        i === histTab ? c(ansi.bold + ansi.cyan, `● ${t}`) : c(ansi.gray, `○ ${t}`),
+      ).join("  ");
+      const head = [titleLine, tabBar, ""];
+      // tail is always 3 lines (position + blank + footer) so the frame
+      // height is stable and total lines can never exceed vpRows.
+      const budget = Math.max(4, vpRows - head.length - 3);
+      histBudget = budget;
+      const maxScroll = Math.max(0, full.length - budget);
+      if (histScroll > maxScroll) histScroll = maxScroll;
+      if (histScroll < 0) histScroll = 0;
+      const visible = full.slice(histScroll, histScroll + budget);
+      const above = histScroll;
+      const below = full.length - (histScroll + visible.length);
+      let posLine: string;
+      if (above > 0 || below > 0) {
+        posLine = c(ansi.gray, `${above > 0 ? `▲ ${above} more  ·  ` : ""}rows ${histScroll + 1}–${histScroll + visible.length} of ${full.length}${below > 0 ? `  ·  ▼ ${below} more` : ""}`);
+      } else if (tab === "runs") {
+        posLine = c(ansi.gray, `${histEntries.length} run${histEntries.length === 1 ? "" : "s"}`);
+      } else if (tab === "bests") {
+        const n = cards[0]?.lines.length ?? 0;
+        posLine = c(ansi.gray, `${n} mode${n === 1 ? "" : "s"}`);
+      } else {
+        posLine = "";
       }
-      lines.push(foot);
+      const lines = [...head, ...visible, posLine, "", foot];
       stdout.write(composeScreen(centerBlock(lines, innerW + 4), vpCols, vpRows, innerW + 4));
       return;
     }
 
-    const body: string[] = [];
+    const options: { label: string; value: string; active: boolean }[] = [];
+    const actions: string[] = [];
+    const LABEL_W = 15; // fits "Aa punctuation", the longest option label
     rows.forEach((id, i) => {
       const active = i === sel;
-      const marker = active ? c(ansi.bold + ansi.cyan, "> ") : "  ";
-      if (id === "start" || id === "quit") {
-        if (id === "start") body.push("");
-        body.push(marker + rowValue(id));
+      const marker = active ? c(ansi.bold + ansi.cyan, "▌ ") : "  ";
+      if (id === "start" || id === "history" || id === "quit") {
+        actions.push(marker + rowValue(id));
         return;
       }
-      const label = c(active ? ansi.bold + ansi.white : ansi.gray, rowLabel(id).padEnd(13));
-      body.push(marker + label + rowValue(id));
+      options.push({ label: rowLabel(id), value: rowValue(id), active });
     });
 
-    const innerW = Math.max(...body.map((l) => stripAnsi(l).length));
-    const lines = buildBox([
-      padCenter(c(ansi.bold + ansi.cyan, "typo"), innerW),
-      padCenter(c(ansi.gray, "set up your test"), innerW),
-      "",
-      ...body,
-    ]);
+    // Justified rows: labels hug the left, values hug the right edge, so
+    // the panel width is load-bearing instead of trailing dead space.
+    const valueW = Math.max(0, ...options.map((o) => stripAnsi(o.value).length));
+    const profW = profileLines.length > 0 ? Math.max(...profileLines.map((l) => stripAnsi(l).length)) : 0;
+    // Roomy minimum so the panel never hugs the rows (screenshot #3);
+    // clamped for very narrow terminals so the box can't overflow them.
+    const minW = Math.min(34, Math.max(16, vpCols - 10));
+    const innerW = Math.max(2 + LABEL_W + 1 + valueW, profW, minW);
+    const optionLines = options.map((o) => {
+      const marker = o.active ? c(ansi.bold + ansi.cyan, "▌ ") : "  ";
+      const label = c(o.active ? ansi.bold + ansi.white : ansi.gray, o.label.padEnd(LABEL_W));
+      const gap = " ".repeat(Math.max(1, innerW - 2 - LABEL_W - stripAnsi(o.value).length));
+      return marker + label + gap + o.value;
+    });
+    // Actions read as menu items under the options — same left edge,
+    // not centered (centered buttons of different widths zigzag).
+    const actionLines = actions;
+    const headTitle = padCenter(`${logo()}  ${c(ansi.gray, "·  setup")}`, innerW);
+    const headSub = padCenter(c(ansi.gray, "pick a setup, hit enter"), innerW);
+    const content = [headTitle, headSub, "", ...optionLines, "", divider(innerW), "", ...actionLines];
+    if (profileLines.length > 0) {
+      content.push("", divider(innerW), ...profileLines.map((l) => padCenter(l, innerW)));
+    }
+    const lines = buildBox(content, 3);
     lines.push("");
     if (editing) {
-      lines.push(c(ansi.gray, "type a file path  ·  enter confirm  ·  esc cancel"));
+      lines.push(
+        padCenter(
+          `${keycap("type path")}  ${c(ansi.gray, "·")}  ${keycap("⏎")} ${c(ansi.gray, "confirm")}  ${c(ansi.gray, "·")}  ${keycap("esc")} ${c(ansi.gray, "cancel")}`,
+          contentWidth,
+        ),
+      );
     } else {
-      lines.push(c(ansi.gray, "↑↓/jk move  ·  ←→/hl change  ·  enter select  ·  q quit"));
+      lines.push(
+        padCenter(
+          `${keycap("↑↓/jk")} ${c(ansi.gray, "move")}  ${c(ansi.gray, "·")}  ${keycap("←→/hl")} ${c(ansi.gray, "change")}  ${c(ansi.gray, "·")}  ${keycap("⏎")} ${c(ansi.gray, "select")}  ${c(ansi.gray, "·")}  ${keycap("q")} ${c(ansi.gray, "quit")}`,
+          contentWidth,
+        ),
+      );
     }
     if (message) {
-      lines.push(c(ansi.red, message));
+      lines.push(padCenter(c(ansi.bold + ansi.red, `!  ${message}`), contentWidth));
     }
     stdout.write(composeScreen(centerBlock(lines, contentWidth), vpCols, vpRows, contentWidth));
   }
@@ -485,6 +555,25 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
   }
 
   return new Promise<MenuResult>((resolve) => {
+    // Background profile: level · XP bar · streak · best — redraws once ready.
+    void loadHistory()
+      .then((h) => {
+        if (h.length === 0 || screen !== "menu") return;
+        const xp = totalXp(h);
+        const prog = xpProgress(xp);
+        const st = streaks(h, Date.now());
+        const best = Math.max(...h.map((x) => x.wpm));
+        const streakTxt = st.current > 0 ? `${st.current}d streak` : `○ no streak yet`;
+        profileLines = [
+          c(ansi.gray, `lv ${prog.level}  `) +
+            xpBar(prog.into, prog.need, 8) +
+            c(ansi.gray, `  ${xp.toLocaleString("en-US")} xp`),
+          c(ansi.gray, `${streakTxt}  ·  ★ ${best.toFixed(0)} best`),
+        ];
+        draw();
+      })
+      .catch(() => {});
+
     function cleanup(): void {
       stdin.off("data", onData);
       process.stdout.off("resize", onResize);
@@ -525,6 +614,8 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     async function openHistory(): Promise<void> {
       histEntries = await loadHistory();
       screen = "history";
+      histTab = 0;
+      histScroll = 0;
       draw();
     }
 
@@ -571,8 +662,54 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       }
 
       if (screen === "history") {
-        screen = "menu";
-        draw();
+        // Tabbed viewer: ←→/tab switch screens, ↑↓ scroll, esc/q back.
+        // (Deliberately NOT "any key goes back" — that would eat navigation.)
+        if (data === "\x1b" || data === "q" || data === "Q" || data === "\x7f" || data === "\r" || data === "\n") {
+          screen = "menu";
+          histScroll = 0;
+          draw();
+          return;
+        }
+        const hArrow = ARROWS[data];
+        if (hArrow === "left" || data === "h" || data === "H") {
+          histTab = (histTab - 1 + HIST_TABS.length) % HIST_TABS.length;
+          histScroll = 0;
+          draw();
+          return;
+        }
+        if (hArrow === "right" || data === "l" || data === "L" || data === "\t") {
+          histTab = (histTab + 1) % HIST_TABS.length;
+          histScroll = 0;
+          draw();
+          return;
+        }
+        if (data >= "1" && data <= String(HIST_TABS.length)) {
+          histTab = Number(data) - 1;
+          histScroll = 0;
+          draw();
+          return;
+        }
+        if (hArrow === "up" || data === "k" || data === "K") {
+          histScroll = Math.max(0, histScroll - 1);
+          draw();
+          return;
+        }
+        if (hArrow === "down" || data === "j" || data === "J" || data === " ") {
+          histScroll = histScroll + 1;
+          draw();
+          return;
+        }
+        if (data === "\x1b[5~") {
+          histScroll = Math.max(0, histScroll - Math.max(1, histBudget - 1));
+          draw();
+          return;
+        }
+        if (data === "\x1b[6~") {
+          histScroll = histScroll + Math.max(1, histBudget - 1);
+          draw();
+          return;
+        }
+        if (data.startsWith("\x1b")) return;
         return;
       }
 
