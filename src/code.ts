@@ -1,8 +1,8 @@
 // Bundled code snippets for `--code <lang>` (Task #13). Offline by design:
-// 12 languages × 2 snippets. Written with \n line breaks for readability;
-// generateCode collapses them to single spaces (same as custom text),
-// preserving the training value: brackets, operators, camelCase, symbols.
-import { normalizeCustom } from "./generator.js";
+// 12 languages × 2 snippets. Written with \n line breaks and indentation;
+// generateCode preserves newlines (the test renders multi-line, Enter
+// types each line break) while tabs become spaces and trailing spaces
+// per line are stripped (invisible trailing whitespace is untypable).
 
 export const CODE_LANGS = [
   "python",
@@ -170,13 +170,20 @@ end`,
 };
 
 /**
- * Random snippet for a language, whitespace-collapsed and ready to type.
+ * Random snippet for a language, ready to type: newlines and indentation
+ * preserved, tabs expanded, trailing whitespace stripped, capped at
+ * maxChars (cut at the last newline so we never end mid-line).
  * Accepts an injectable rng for deterministic tests. Throws on unknown lang.
  */
-export function generateCode(lang: string, rng: () => number = Math.random): string {
+export function generateCode(lang: string, rng: () => number = Math.random, maxChars = 1200): string {
   const id = normalizeCodeLang(lang);
   if (id == null) throw new Error(`Unknown code language: ${lang} (try ${CODE_LANGS.join(", ")})`);
   const snippets = CODE_SNIPPETS[id];
-  const text = snippets[Math.floor(rng() * snippets.length)]!;
-  return normalizeCustom(text);
+  let text = snippets[Math.floor(rng() * snippets.length)]!;
+  text = text.replace(/\t/g, "    ").replace(/ +$/gm, "").replace(/^\n+/, "").trimEnd();
+  if (text.length > maxChars) {
+    const cut = text.lastIndexOf("\n", maxChars);
+    text = (cut > 0 ? text.slice(0, cut) : text.slice(0, maxChars)).trimEnd();
+  }
+  return text;
 }

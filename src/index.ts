@@ -68,7 +68,7 @@ ${H("Progress:")}
   ${flag("--version")}          ${D("show version")}
 
 ${H("Keys while typing:")}
-  ${keycap("type")} ${D("begin")}  ${D("·")}  ${keycap("esc")} ${D("quit")}  ${D("·")}  ${keycap("⌫")} ${D("fix")}  ${D("·")}  ${keycap("ctrl+w")} ${D("delete word")}
+  ${keycap("type")} ${D("begin")}  ${D("·")}  ${keycap("esc")} ${D("quit")}  ${D("·")}  ${keycap("⌫")} ${D("fix")}  ${D("·")}  ${keycap("ctrl+w")} ${D("delete word")}  ${D("·")}  ${keycap("⏎")} ${D("newline (code)")}
 
 ${H("Keys on results:")}
   ${keycap("r")} ${D("retry")}  ${D("·")}  ${keycap("tab/n")} ${D("next")}  ${D("·")}  ${keycap("q/esc")} ${D("quit")}

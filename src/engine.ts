@@ -48,56 +48,50 @@ export function leaveFullscreen(): void {
   }
 }
 
-/** Split global char indices into wrapped lines (greedy by words). */
+/**
+ * Split global char indices into wrapped lines (greedy by words).
+ * Newlines in the target (code mode) force line breaks; the "\n" index
+ * itself is kept at the end of its visual line and renders as ⏎.
+ */
 export function layoutLines(target: string, width: number): number[][] {
-  const words: { start: number; len: number }[] = [];
-  let i = 0;
-  while (i < target.length) {
-    // word = run of non-space; spaces handled as separators (single space assumed but be safe)
-    let j = i;
-    while (j < target.length && target[j] !== " ") j++;
-    words.push({ start: i, len: j - i });
-    // include following spaces with the word gap (usually 1)
-    let k = j;
-    while (k < target.length && target[k] === " ") k++;
-    // attach spaces to previous word for wrapping purposes by advancing i
-    // we store gap implicitly; simpler: advance i to k
-    void k;
-    i = j + 1; // skip exactly one space; extra spaces each become own step
-    if (target[j] !== " ") {
-      // j === target.length (last word, no trailing space)
-      i = j;
-    }
-  }
-  // Build lines greedily
+  const w = Math.max(1, width);
   const lines: number[][] = [];
   let cur: number[] = [];
-  let curLen = 0;
-  for (const w of words) {
-    const need = (cur.length === 0 ? 0 : 1) + w.len;
-    if (cur.length > 0 && curLen + need > width) {
-      lines.push(cur);
-      cur = [];
-      curLen = 0;
+  const push = (): void => {
+    lines.push(cur);
+    cur = [];
+  };
+  let i = 0;
+  while (i < target.length) {
+    const ch = target[i]!;
+    if (ch === "\n") {
+      cur.push(i);
+      push();
+      i++;
+      continue;
     }
-    // push space separator index (the char before word start) if not first on line and word not at 0
-    if (cur.length > 0) {
-      const spaceIdx = w.start - 1;
-      if (spaceIdx >= 0 && target[spaceIdx] === " ") {
-        cur.push(spaceIdx);
-        curLen += 1;
+    cur.push(i);
+    i++;
+    if (cur.length === w) {
+      const next = target[i];
+      if (next === undefined || next === "\n" || next === " " || target[cur[cur.length - 1]!] === " ") {
+        // Line is exactly full; a separator (or the end) starts the next one.
+        push();
+      } else {
+        // Backtrack to the last space so words don't split across lines.
+        let k = cur.length - 1;
+        while (k > 0 && target[cur[k]!] !== " ") k--;
+        if (k > 0) {
+          const overflow = cur.splice(k + 1);
+          push();
+          cur = overflow;
+        } else {
+          push(); // one long word — hard break instead of overflowing
+        }
       }
     }
-    for (let k = 0; k < w.len; k++) cur.push(w.start + k);
-    curLen += w.len;
-    // Edge: single word longer than width — force break
-    if (curLen >= width) {
-      lines.push(cur);
-      cur = [];
-      curLen = 0;
-    }
   }
-  if (cur.length > 0) lines.push(cur);
+  if (cur.length > 0) push();
   if (lines.length === 0) lines.push([]);
   return lines;
 }
@@ -139,21 +133,22 @@ export function composeScreen(
 }
 
 /**
- * Word under the cursor: [start, end) char range, space-delimited.
- * A cursor sitting on a space belongs to the next word; past-the-end
- * (or empty target) yields null. Exported for tests.
+ * Word under the cursor: [start, end) char range, delimited by spaces
+ * and newlines. A cursor sitting on a separator belongs to the next
+ * word; past-the-end (or empty target) yields null. Exported for tests.
  */
 export function currentWordRange(target: string, pos: number): { start: number; end: number } | null {
+  const isSep = (ch: string | undefined): boolean => ch === " " || ch === "\n";
   if (pos >= target.length || target.length === 0) return null;
   let s = pos;
-  if (target[s] === " ") {
-    while (s < target.length && target[s] === " ") s++;
+  if (isSep(target[s])) {
+    while (s < target.length && isSep(target[s])) s++;
     if (s >= target.length) return null;
   } else {
-    while (s > 0 && target[s - 1] !== " ") s--;
+    while (s > 0 && !isSep(target[s - 1])) s--;
   }
   let e = s;
-  while (e < target.length && target[e] !== " ") e++;
+  while (e < target.length && !isSep(target[e])) e++;
   return { start: s, end: e };
 }
 
@@ -179,13 +174,13 @@ export function buildBox(content: string[], pad = 2): string[] {
 }
 
 /**
- * Delete the last word (plus any spaces before it), like Ctrl+Backspace.
- * Exported for tests and reused by the menu's path field.
+ * Delete the last word (plus any spaces/newlines before it), like
+ * Ctrl+Backspace. Exported for tests and reused by the menu's path field.
  */
 export function deleteLastWord(s: string): string {
   let end = s.length;
-  while (end > 0 && s[end - 1] === " ") end--;
-  while (end > 0 && s[end - 1] !== " ") end--;
+  while (end > 0 && (s[end - 1] === " " || s[end - 1] === "\n")) end--;
+  while (end > 0 && s[end - 1] !== " " && s[end - 1] !== "\n") end--;
   return s.slice(0, end);
 }
 
@@ -270,6 +265,18 @@ export function renderChar(
   const isTyped = idx < typed.length;
   const correct = isTyped && typed[idx] === t;
   const wrong = isTyped && typed[idx] !== t;
+
+  // Newlines (code mode) render as a ⏎ marker so line breaks stay visible.
+  if (t === "\n") {
+    const mark = "⏎";
+    if (isCursor) {
+      if (!opts.caret) return c(ansi.gray, mark);
+      return c(ansi.inverse, mark);
+    }
+    if (correct) return opts.dim ? c(ansi.dim + ansi.green, mark) : c(ansi.green, mark);
+    if (wrong) return c(ansi.red, mark);
+    return opts.dim ? c(ansi.dim + ansi.gray, mark) : c(ansi.gray, mark);
+  }
 
   if (isCursor) {
     if (!opts.caret) return pendingStyle(t, opts.active);
@@ -369,6 +376,8 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let correctKeystrokes = 0;
   let totalKeystrokes = 0;
   let corrections = 0; // correction-key presses (Task #4)
+  // Code mode targets span lines: Enter types "\n", rendered as ⏎.
+  const multiline = target.includes("\n");
   let startTime: number | null = null;
   let finished = false;
   let finishElapsed = 0;
@@ -549,14 +558,18 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         // extra chars beyond target
         if (li === textLines.length - 1 && typed.length > target.length) {
           const extra = typed.slice(target.length, target.length + 20);
-          for (const ch of extra) line += c(ansi.bgRed + ansi.white, ch === " " ? " " : ch);
+          for (const ch of extra) {
+            const glyph = ch === " " ? " " : ch === "\n" ? "⏎" : ch;
+            line += c(ansi.bgRed + ansi.white, glyph);
+          }
         }
         lines.push(line);
       }
       if (end < textLines.length) lines.push(c(ansi.gray, `… +${textLines.length - end} more lines`));
       lines.push("");
       lines.push(
-        `${keycap("esc")} ${c(ansi.gray, "quit")}   ${c(ansi.gray, "·")}   ${keycap("ctrl+w")} ${c(ansi.gray, "word")}   ${c(ansi.gray, "·")}   ${keycap("⌫")} ${c(ansi.gray, "fix")}`,
+        `${keycap("esc")} ${c(ansi.gray, "quit")}   ${c(ansi.gray, "·")}   ${keycap("ctrl+w")} ${c(ansi.gray, "word")}   ${c(ansi.gray, "·")}   ${keycap("⌫")} ${c(ansi.gray, "fix")}` +
+          (multiline ? `   ${c(ansi.gray, "·")}   ${keycap("⏎")} ${c(ansi.gray, "newline")}` : ""),
       );
     } else {
       // results — framed panel
@@ -633,10 +646,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     finishElapsed = startTime === null ? 0 : (Date.now() - startTime) / 1000;
     if (finishElapsed < 0.5) finishElapsed = 0.5;
     snapshot();
-    // Final word has no trailing space — evaluate it explicitly.
+    // Final word has no trailing separator — evaluate it explicitly.
     if (typed.length >= target.length && target.length > 0) {
       let s = target.length - 1;
-      while (s >= 0 && target[s] !== " ") s--;
+      while (s >= 0 && target[s] !== " " && target[s] !== "\n") s--;
       checkWord(s + 1, target.length);
     }
     const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
@@ -769,17 +782,21 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           draw();
           return;
         }
-        // ignore tab/enter during run
-        if (data === "\t" || data === "\r" || data === "\n") return;
+        // Tab is ignored during a run. Enter types a newline in
+        // multi-line targets (code mode); elsewhere it's ignored so a
+        // stray Enter can't corrupt a single-line run.
+        if (data === "\t") return;
+        if (!multiline && (data === "\r" || data === "\n")) return;
 
         // printable input (may contain multiple chars if pasted)
         let added = false;
         const batchAt = Date.now();
         let firstInBatch = true;
         let appended = "";
-        for (const ch of data) {
+        const text = multiline ? data.replace(/\r\n/g, "\n").replace(/\r/g, "\n") : data;
+        for (const ch of text) {
           const code = ch.codePointAt(0)!;
-          if (code < 32 || code === 127) continue; // control
+          if (ch !== "\n" && (code < 32 || code === 127)) continue; // control
           if (typed.length >= target.length + 20) break;
           if (startTime === null) startTime = Date.now();
           const pos = typed.length;
@@ -795,10 +812,10 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
           firstInBatch = false;
           added = true;
-          // Word completed: a space typed where the target has a space.
-          if (ch === " " && pos < target.length && target[pos] === " ") {
+          // Word completed: a separator typed where the target has one.
+          if ((ch === " " || ch === "\n") && pos < target.length && target[pos] === ch) {
             let s = pos - 1;
-            while (s >= 0 && target[s] !== " ") s--;
+            while (s >= 0 && target[s] !== " " && target[s] !== "\n") s--;
             checkWord(s + 1, pos);
           }
         }

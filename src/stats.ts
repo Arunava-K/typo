@@ -254,9 +254,11 @@ export function worstKeys(
   return rows.slice(0, Math.max(0, limit));
 }
 
-/** Display form: space renders as ␣ so the table stays readable. */
+/** Display form: space renders as ␣, newline as ⏎, so tables stay readable. */
 export function formatKey(k: string): string {
-  return k === " " ? "␣" : k;
+  if (k === " ") return "␣";
+  if (k === "\n") return "⏎";
+  return k;
 }
 
 // --- Mistake log (Task #5) ---
