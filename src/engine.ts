@@ -1,5 +1,6 @@
 import { ansi, c, keycap, logo, padCenter, progressBar, stripAnsi, termHeight, termWidth } from "./ui.js";
 import {
+  MIN_ZEN_SAVE_SEC,
   accumulateKeyStats,
   buildWpmTrace,
   calcBurst,
@@ -7,6 +8,7 @@ import {
   formatKey,
   normalizeKey,
   scoreRun,
+  scoreZen,
   shortWord,
   sparkline,
   wordMistake,
@@ -32,6 +34,7 @@ export interface RunConfig {
   timeLimitSec: number | null; // null = no limit (ends at full text)
   saveMode: string;
   codeLang?: CodeLang | null; // set for code mode → syntax colors + editor assists
+  zen?: boolean; // freestyle: no target, Esc finishes, 15s minimum to save
 }
 
 export type AfterAction = "quit" | "restart" | "next";
@@ -388,7 +391,8 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let totalKeystrokes = 0;
   let corrections = 0; // correction-key presses (Task #4)
   // Code mode targets span lines: Enter types "\n", rendered as ⏎.
-  const multiline = target.includes("\n");
+  // Zen is freestyle multiline writing (target is empty by design).
+  const multiline = target.includes("\n") || cfg.zen === true;
   // Syntax token map for code mode (null elsewhere → classic colors).
   const kindMap = cfg.codeLang ? buildKindMap(target, cfg.codeLang) : null;
   let assists = 0; // editor-assisted chars (tab fill, auto-indent, auto-close)
@@ -458,8 +462,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       typed += ch;
       appended += ch;
       totalKeystrokes++;
-      const expected = pos < target.length ? target[pos]! : ch;
-      const hit = pos < target.length && ch === target[pos];
+      // Zen has no target: every char counts as correct by definition.
+      const expected = cfg.zen === true ? ch : pos < target.length ? target[pos]! : ch;
+      const hit = cfg.zen === true ? true : pos < target.length && ch === target[pos];
       if (hit) correctKeystrokes++;
       // Latency: time since previous keystroke batch. Chars after the
       // first in a batch get 0 (excluded from avg in stats).
@@ -497,6 +502,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     }
   }
   function countCorrect(): number {
+    if (cfg.zen === true) return typed.length; // freestyle: all typed counts
     let n = 0;
     const m = Math.min(typed.length, target.length);
     for (let i = 0; i < m; i++) if (typed[i] === target[i]) n++;
@@ -518,7 +524,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   }
 
   function liveScore() {
-    return scoreRun(target, typed, Math.max(elapsed(), 0.01));
+    const e = Math.max(elapsed(), 0.01);
+    if (cfg.zen === true) return scoreZen(typed, e, totalKeystrokes, corrections);
+    return scoreRun(target, typed, e);
   }
 
   function draw() {
@@ -608,6 +616,42 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     lines.push("");
 
     if (!finished) {
+      if (cfg.zen === true) {
+        // Zen freestyle: the buffer IS the text — plain white with the
+        // cursor parked at the end. Newlines render as ⏎ like code mode.
+        if (startTime === null) {
+          lines.push(c(ansi.gray, "Start typing to begin…"));
+          lines.push("");
+        } else {
+          lines.push("");
+        }
+        const zenLines = layoutLines(typed.length > 0 ? typed : " ", contentWidth);
+        const zenCursor = zenLines.length - 1;
+        const zWin = textWindowSize(vpRows);
+        let zStart = Math.max(0, zenCursor - 1);
+        if (zStart + zWin > zenLines.length) zStart = Math.max(0, zenLines.length - zWin);
+        const zEnd = Math.min(zenLines.length, zStart + zWin);
+        for (let li = zStart; li < zEnd; li++) {
+          const idxs = zenLines[li]!;
+          let line = "";
+          for (const idx of idxs) {
+            if (idx >= typed.length) {
+              line += c(ansi.inverse, " ");
+              continue;
+            }
+            const ch = typed[idx]!;
+            const glyph = ch === "\n" ? "⏎" : ch;
+            line += c(li < zenCursor ? ansi.gray : ansi.white, glyph);
+          }
+          if (li === zenCursor) line += c(ansi.inverse, " ");
+          lines.push(line);
+        }
+        if (zEnd < zenLines.length) lines.push(c(ansi.gray, `… +${zenLines.length - zEnd} more lines`));
+        lines.push("");
+        lines.push(
+          `${keycap("esc")} ${c(ansi.gray, "finish")}   ${c(ansi.gray, "·")}   ${keycap("ctrl+w")} ${c(ansi.gray, "word")}   ${c(ansi.gray, "·")}   ${keycap("⌫")} ${c(ansi.gray, "fix")}   ${c(ansi.gray, "·")}   ${keycap("⏎")} ${c(ansi.gray, "newline")}`,
+        );
+      } else {
       if (startTime === null) {
         lines.push(c(ansi.gray, "Start typing to begin…"));
         lines.push("");
@@ -671,9 +715,13 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
             ? `   ${c(ansi.gray, "·")}   ${keycap("⏎")} ${c(ansi.gray, "newline")}   ${c(ansi.gray, "·")}   ${keycap("tab")} ${c(ansi.gray, "indent")}`
             : ""),
       );
+      }
     } else {
       // results — framed panel
-      const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
+      const f =
+        cfg.zen === true
+          ? scoreZen(typed, finishElapsed, totalKeystrokes, corrections)
+          : scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
       const traceSamples = samples.map((s) => ({
         tSec: s.t,
         correctChars: s.correct,
@@ -729,6 +777,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         body.push(c(ansi.bold + ansi.yellow, `✦ ★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)}) ★ ✦`));
       }
       if (resultSaved) body.push(c(ansi.gray, `saved to ~/.typo/history.json${xpNote}`));
+      if (cfg.zen === true && finishElapsed < MIN_ZEN_SAVE_SEC) {
+        body.push(c(ansi.gray, `under ${MIN_ZEN_SAVE_SEC}s — not saved`));
+      }
       body.push("");
       body.push(
         `${keycap("r")} ${c(ansi.gray, "retry")}   ${keycap("tab/n")} ${c(ansi.gray, "next")}   ${keycap("q/esc")} ${c(ansi.gray, "quit")}`,
@@ -747,13 +798,18 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     finishElapsed = startTime === null ? 0 : (Date.now() - startTime) / 1000;
     if (finishElapsed < 0.5) finishElapsed = 0.5;
     snapshot();
+    // Zen too short to save still shows results, just unrecorded.
+    const tooShort = cfg.zen === true && finishElapsed < MIN_ZEN_SAVE_SEC;
     // Final word has no trailing separator — evaluate it explicitly.
     if (typed.length >= target.length && target.length > 0) {
       let s = target.length - 1;
       while (s >= 0 && target[s] !== " " && target[s] !== "\n") s--;
       checkWord(s + 1, target.length);
     }
-    const f = scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
+    const f =
+      cfg.zen === true
+        ? scoreZen(typed, finishElapsed, totalKeystrokes, corrections)
+        : scoreRun(target, typed, finishElapsed, { totalKeystrokes, corrections });
     const gained = xpForDuration(finishElapsed);
     const lvBefore = levelForXp(priorXp);
     const lvAfter = levelForXp(priorXp + gained);
@@ -770,6 +826,11 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       avgMs: Math.round(w.avgMs),
       presses: w.presses,
     }));
+    if (tooShort) {
+      // Skip saving entirely — draw() notes it on the panel instead.
+      draw();
+      return;
+    }
     saveResult({
       date: new Date().toISOString(),
       mode: cfg.saveMode,
@@ -808,6 +869,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
   function checkEnd() {
     if (finished) return;
+    if (cfg.zen === true) return; // freestyle ends only via Esc
     // words/quote/custom: end when full length typed
     if (cfg.timeLimitSec == null) {
       if (typed.length >= target.length) finish();
@@ -835,8 +897,14 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       }
 
       if (!finished) {
-        // Esc (bare) quits. Arrow/function keys start with \x1b[ — ignore.
+        // Esc (bare) quits — except in zen, where it finishes the run
+        // (Ctrl+C still bails without saving). Arrow/function keys
+        // start with \x1b[ — ignore.
         if (data === "\x1b") {
+          if (cfg.zen === true && startTime !== null) {
+            finish();
+            return;
+          }
           cleanup();
           resolve("quit");
           return;

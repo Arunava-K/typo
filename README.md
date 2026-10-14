@@ -121,6 +121,7 @@ under the panel.
 | `--quote` | Random quote / sentence ❝ |
 | `--daily` | Shared daily text, same all day on every machine ◉ |
 | `--code <lang>` | Code snippet test: python, javascript, typescript, go, rust, java, c, cpp, csharp, php, ruby, html |
+| `--zen` | Free typing, no prompt — Esc finishes (15s+ saved) |
 | `--custom <file>` | Practice with text from a file ✎ |
 | `--text "..."` | Practice with inline custom text |
 | `-p, --punctuation` | Add punctuation + capitals (words/time modes) |
@@ -145,6 +146,7 @@ typo --words 50         # 50 words
 typo --quote            # random quote
 typo --daily            # today's shared text
 typo --code python      # python snippet
+typo --zen               # free typing
 typo --custom essay.txt # your own text
 typo --history          # past scores (colorized)
 typo --replay           # watch your last run back

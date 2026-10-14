@@ -24,9 +24,7 @@ export function calcRawWpm(totalTyped: number, elapsedSec: number): number {
 export function calcGrossWpm(totalKeystrokes: number, elapsedSec: number): number {
   if (elapsedSec <= 0) return 0;
   return totalKeystrokes / 5 / (elapsedSec / 60);
-}
-
-/** CPM: correct chars (incl. spaces) per minute. */
+}/** CPM: correct chars (incl. spaces) per minute. */
 export function calcCpm(correctChars: number, elapsedSec: number): number {
   if (elapsedSec <= 0) return 0;
   return correctChars / (elapsedSec / 60);
@@ -177,6 +175,35 @@ export function scoreRun(
     cpm: calcCpm(correct, elapsedSec),
     cpmRaw: elapsedSec <= 0 ? 0 : typed.length / (elapsedSec / 60),
     corrections: opts.corrections ?? 0,
+  };
+}
+
+// --- Zen mode scoring (Task #14) ---
+// Freestyle has no target: every typed char counts as correct by
+// definition, so WPM == raw and accuracy is always 100.
+
+/** Minimum zen run length that gets saved to history (Monkeytype parity). */
+export const MIN_ZEN_SAVE_SEC = 15;
+
+export function scoreZen(
+  typed: string,
+  elapsedSec: number,
+  totalKeystrokes: number,
+  corrections: number,
+): ReturnType<typeof scoreRun> {
+  const wpm = calcRawWpm(typed.length, elapsedSec);
+  return {
+    wpm,
+    raw: wpm,
+    gross: calcGrossWpm(totalKeystrokes, elapsedSec),
+    acc: 100,
+    correctChars: typed.length,
+    incorrectChars: 0,
+    extraChars: 0,
+    missedChars: 0,
+    cpm: calcCpm(typed.length, elapsedSec),
+    cpmRaw: elapsedSec <= 0 ? 0 : typed.length / (elapsedSec / 60),
+    corrections,
   };
 }
 

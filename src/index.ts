@@ -22,7 +22,7 @@ const require = createRequire(import.meta.url);
 const { version: pkgVersion } = require("../package.json") as { version: string };
 
 interface Mode {
-  kind: "time" | "words" | "quote" | "custom" | "daily" | "code";
+  kind: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen";
   timeSec: number;
   wordCount: number;
   customText: string | null;
@@ -49,6 +49,7 @@ ${H("Modes:")} ${D("(default: --time 30)")}
   ${flag("--quote")}            ${D("random quote / sentence  ❝")}
   ${flag("--daily")}            ${D("shared daily text (same all day, everywhere)  ◉")}
   ${flag("--code <lang>")}       ${D("code snippet test (python, javascript, go, rust…)  <>")}
+  ${flag("--zen")}             ${D("free typing, no prompt — esc finishes  ∞")}
   ${flag("--custom <file>")}    ${D("practice with text from a file  ✎")}
   ${flag('--text "..."')}       ${D("practice with inline custom text")}
 
@@ -80,6 +81,7 @@ ${H("Examples:")}
   ${D("$")} typo --quote              ${D("# random quote")}
   ${D("$")} typo --daily              ${D("# today's shared text")}
   ${D("$")} typo --code python        ${D("# python snippet")}
+  ${D("$")} typo --zen                ${D("# free typing")}
   ${D("$")} typo --custom essay.txt   ${D("# custom text from file")}
   ${D("$")} typo --replay             ${D("# watch your last run back")}
   ${divider(56)}
@@ -151,6 +153,9 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
       modeSet = true;
     } else if (a === "--daily" || a === "-d") {
       mode.kind = "daily";
+      modeSet = true;
+    } else if (a === "--zen" || a === "-z") {
+      mode.kind = "zen";
       modeSet = true;
     } else if (a === "--code") {
       const lang = argv[++i];
@@ -263,30 +268,33 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   return { mode, history, help, version, debugKeys, replay, historyModes, historyLast, exportFmt, importFile };
 }
 
-async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null; codeLang: CodeLang | null }> {
+async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null; codeLang: CodeLang | null; zen: boolean }> {
   if (mode.kind === "time") {
     const count = Math.max(80, Math.ceil(mode.timeSec * 4));
     const text = generateWords(count, { punctuation: mode.punctuation, numbers: mode.numbers });
     const mods = [mode.punctuation ? ",punct" : "", mode.numbers ? ",num" : ""].join("");
-    return { text, label: `time ${mode.timeSec}s${mods}`, saveMode: `time ${mode.timeSec}s`, timeLimit: mode.timeSec, codeLang: null };
+    return { text, label: `time ${mode.timeSec}s${mods}`, saveMode: `time ${mode.timeSec}s`, timeLimit: mode.timeSec, codeLang: null, zen: false };
   }
   if (mode.kind === "words") {
     const text = generateWords(mode.wordCount, { punctuation: mode.punctuation, numbers: mode.numbers });
-    return { text, label: `words ${mode.wordCount}`, saveMode: `words ${mode.wordCount}`, timeLimit: null, codeLang: null };
+    return { text, label: `words ${mode.wordCount}`, saveMode: `words ${mode.wordCount}`, timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "quote") {
     const text = generateQuote();
-    return { text, label: "quote", saveMode: "quote", timeLimit: null, codeLang: null };
+    return { text, label: "quote", saveMode: "quote", timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "daily") {
     const day = dailyDateStr();
     const text = generateDaily(day);
-    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null, codeLang: null };
+    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "code") {
     const lang = normalizeCodeLang(mode.codeLang ?? "python") ?? "python";
     const text = generateCode(lang);
-    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null, codeLang: lang };
+    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null, codeLang: lang, zen: false };
+  }
+  if (mode.kind === "zen") {
+    return { text: "", label: "zen", saveMode: "zen", timeLimit: null, codeLang: null, zen: true };
   }
   // custom
   let raw = mode.customText ?? "";
@@ -303,7 +311,7 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
     console.error("Custom text is empty after trimming whitespace.");
     process.exit(1);
   }
-  return { text, label: "custom", saveMode: "custom", timeLimit: null, codeLang: null };
+  return { text, label: "custom", saveMode: "custom", timeLimit: null, codeLang: null, zen: false };
 }
 
 async function menuLoop(): Promise<void> {
@@ -343,6 +351,7 @@ async function menuLoop(): Promise<void> {
         timeLimitSec: t.timeLimit,
         saveMode: t.saveMode,
         codeLang: t.codeLang,
+        zen: t.zen,
       };
       const action = await runTest(cfg);
       if (action === "quit") break;
@@ -453,6 +462,7 @@ async function main(): Promise<void> {
       timeLimitSec: t.timeLimit,
       saveMode: t.saveMode,
       codeLang: t.codeLang,
+      zen: t.zen,
     };
     const action = await runTest(cfg);
     if (action === "quit") {

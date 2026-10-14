@@ -18,7 +18,7 @@ import { CODE_LANGS } from "./code.js";
 import { sparkline } from "./stats.js";
 
 export interface MenuConfig {
-  mode: "time" | "words" | "quote" | "custom" | "daily" | "code";
+  mode: "time" | "words" | "quote" | "custom" | "daily" | "code" | "zen";
   timeSec: number;
   wordCount: number;
   punctuation: boolean;
@@ -31,7 +31,7 @@ export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" 
 
 export const TIME_OPTS = [15, 30, 60, 120, 240];
 export const WORD_OPTS = [10, 25, 50, 100, 200];
-const MODES = ["time", "words", "quote", "custom", "daily", "code"] as const;
+const MODES = ["time", "words", "quote", "custom", "daily", "code", "zen"] as const;
 type ModeName = (typeof MODES)[number];
 
 /**
@@ -303,6 +303,7 @@ const MODE_LABEL: Record<ModeName, string> = {
   custom: "custom file",
   daily: "daily",
   code: "code",
+  zen: "zen",
 };
 
 const MODE_ICON: Record<ModeName, string> = {
@@ -312,6 +313,7 @@ const MODE_ICON: Record<ModeName, string> = {
   custom: "✎",
   daily: "◉",
   code: "<>",
+  zen: "∞",
 };
 
 export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
