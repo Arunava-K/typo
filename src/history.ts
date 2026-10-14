@@ -20,6 +20,7 @@ export interface HistoryEntry {
   cpm?: number; // correct chars per minute (Task #4)
   corrections?: number; // backspace/word-delete/clear presses (Task #4)
   mistakes?: { word: string; typed: string }[]; // completed words typed wrong, ≤20 (Task #5)
+  assists?: number; // editor-assisted chars: tab fill, auto-indent, auto-close (code)
 }
 
 // --- Session replay (Task #5) ---
@@ -118,6 +119,7 @@ const CSV_COLS = [
   "durationSec",
   "cpm",
   "corrections",
+  "assists",
 ] as const;
 
 function csvCell(v: string | number): string {
@@ -143,6 +145,7 @@ export function exportCsv(hist: HistoryEntry[]): string {
         h.durationSec,
         h.cpm ?? "",
         h.corrections ?? "",
+        h.assists ?? "",
       ].join(","),
     );
   }
@@ -186,7 +189,7 @@ function splitCsvLine(line: string): string[] {
 }
 
 const REQUIRED_NUMS = ["wpm", "raw", "acc", "correctChars", "totalTyped", "durationSec"] as const;
-const OPTIONAL_NUMS = ["gross", "consistency", "cpm", "corrections"] as const;
+const OPTIONAL_NUMS = ["gross", "consistency", "cpm", "corrections", "assists"] as const;
 
 /** Validate one raw object into a HistoryEntry; null when malformed. */
 export function toEntry(o: unknown): HistoryEntry | null {

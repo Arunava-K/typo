@@ -15,12 +15,23 @@ import {
 } from "./stats.js";
 import { levelForXp, totalXp, xpForDuration } from "./progression.js";
 import { saveLastReplay, saveResult, loadHistory, type ReplayEvent } from "./history.js";
+import {
+  PAIRS,
+  buildKindMap,
+  codeIndentFor,
+  findMate,
+  kindColor,
+  tabFillFor,
+  type TokenKind,
+} from "./syntax.js";
+import type { CodeLang } from "./code.js";
 
 export interface RunConfig {
   target: string;
   modeLabel: string; // e.g. "time 30s", "words 50", "quote", "custom"
   timeLimitSec: number | null; // null = no limit (ends at full text)
   saveMode: string;
+  codeLang?: CodeLang | null; // set for code mode → syntax colors + editor assists
 }
 
 export type AfterAction = "quit" | "restart" | "next";
@@ -249,47 +260,47 @@ export interface CaretOpts {
   active: boolean;
 }
 
-function pendingStyle(t: string, active: boolean): string {
-  if (t === " ") return " ";
-  return active ? c(ansi.white, t) : c(ansi.gray, t);
-}
-
 export function renderChar(
   target: string,
   typed: string,
   idx: number,
   isCursor: boolean,
   opts: CaretOpts,
+  kind: TokenKind | null = null,
+  match = false,
 ): string {
   const t = target[idx]!;
   const isTyped = idx < typed.length;
   const correct = isTyped && typed[idx] === t;
   const wrong = isTyped && typed[idx] !== t;
-
-  // Newlines (code mode) render as a ⏎ marker so line breaks stay visible.
-  if (t === "\n") {
-    const mark = "⏎";
-    if (isCursor) {
-      if (!opts.caret) return c(ansi.gray, mark);
-      return c(ansi.inverse, mark);
-    }
-    if (correct) return opts.dim ? c(ansi.dim + ansi.green, mark) : c(ansi.green, mark);
-    if (wrong) return c(ansi.red, mark);
-    return opts.dim ? c(ansi.dim + ansi.gray, mark) : c(ansi.gray, mark);
+  const ul = match ? ansi.underline : "";
+  const glyph = t === "\n" ? "⏎" : t;
+  const tokenStyle = kind != null && t !== " " && t !== "\n" ? kindColor(kind) : null;
+  let style: string;
+  if (isCursor && !opts.caret) {
+    // Blinked-off caret: plain pending look.
+    if (tokenStyle != null) style = ansi.dim + tokenStyle;
+    else if (t === " ") style = "";
+    else style = opts.active ? ansi.white : ansi.gray;
+  } else if (isCursor) {
+    if (wrong) style = ansi.bgRed + ansi.white;
+    else if (correct) style = ansi.inverse + ansi.green;
+    else style = ansi.inverse;
+  } else if (correct) {
+    if (tokenStyle != null) style = (opts.dim ? ansi.dim : "") + tokenStyle;
+    else if (t === "\n") style = (opts.dim ? ansi.dim : "") + ansi.green;
+    else style = opts.dim ? ansi.dim + ansi.green : ansi.green;
+  } else if (wrong) {
+    if (t === " ") style = ansi.bgRed;
+    else style = ansi.red;
+  } else {
+    // Pending: dimmed token color in code, gray/white elsewhere.
+    if (tokenStyle != null) style = ansi.dim + tokenStyle;
+    else if (t === "\n") style = (opts.dim ? ansi.dim : "") + ansi.gray;
+    else if (t === " ") style = "";
+    else style = opts.active ? ansi.white : ansi.gray;
   }
-
-  if (isCursor) {
-    if (!opts.caret) return pendingStyle(t, opts.active);
-    if (wrong) return c(ansi.bgRed + ansi.white, t);
-    if (correct) return c(ansi.inverse + ansi.green, t);
-    return c(ansi.inverse, t);
-  }
-  if (correct) return opts.dim ? c(ansi.dim + ansi.green, t) : c(ansi.green, t);
-  if (wrong) {
-    if (t === " ") return c(ansi.bgRed, " ");
-    return c(ansi.red, t);
-  }
-  return pendingStyle(t, opts.active);
+  return style ? c(ul + style, glyph) : glyph;
 }
 
 /**
@@ -378,6 +389,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let corrections = 0; // correction-key presses (Task #4)
   // Code mode targets span lines: Enter types "\n", rendered as ⏎.
   const multiline = target.includes("\n");
+  // Syntax token map for code mode (null elsewhere → classic colors).
+  const kindMap = cfg.codeLang ? buildKindMap(target, cfg.codeLang) : null;
+  let assists = 0; // editor-assisted chars (tab fill, auto-indent, auto-close)
   let startTime: number | null = null;
   let finished = false;
   let finishElapsed = 0;
@@ -418,6 +432,70 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     if (i !== -1) mistakes[i] = row;
     else if (mistakes.length < 50) mistakes.push(row);
   }
+  /**
+   * Shared insertion path for printable input, Tab fill, Enter and
+   * auto-close. Assisted chars (editor QOL) match the target by
+   * construction and are counted separately so scoring stays honest.
+   * With autoIndent, a correctly placed newline also pulls in the next
+   * line's exact indentation as assisted chars.
+   */
+  function insertItems(items: { ch: string; assisted: boolean }[], autoIndent = false): void {
+    if (autoIndent && items.length === 1 && items[0]!.ch === "\n") {
+      const indent = codeIndentFor(target, typed.length);
+      for (const ch of indent) items.push({ ch, assisted: true });
+    }
+    const batchAt = Date.now();
+    let firstInBatch = true;
+    let appended = "";
+    // Assists only fire on single physical presses — never inside a paste,
+    // where an auto-inserted closer would duplicate pasted characters.
+    const allowClose = items.length === 1 || autoIndent;
+    for (const item of items) {
+      const ch = item.ch;
+      if (typed.length >= target.length + 20) break;
+      if (startTime === null) startTime = Date.now();
+      const pos = typed.length;
+      typed += ch;
+      appended += ch;
+      totalKeystrokes++;
+      const expected = pos < target.length ? target[pos]! : ch;
+      const hit = pos < target.length && ch === target[pos];
+      if (hit) correctKeystrokes++;
+      // Latency: time since previous keystroke batch. Chars after the
+      // first in a batch get 0 (excluded from avg in stats).
+      const latency = lastKeyTime == null || firstInBatch === false ? 0 : batchAt - lastKeyTime;
+      keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
+      if (item.assisted) assists++;
+      firstInBatch = false;
+      // Word completed: a separator typed where the target has one.
+      if ((ch === " " || ch === "\n") && pos < target.length && target[pos] === ch) {
+        let s = pos - 1;
+        while (s >= 0 && target[s] !== " " && target[s] !== "\n") s--;
+        checkWord(s + 1, pos);
+      }
+      // Auto-close (code only): a matched opener whose mate comes next
+      // pulls the closer in as an assisted char (empty pairs like `()`).
+      if (multiline && allowClose && hit && PAIRS[ch] !== undefined && target[typed.length] === PAIRS[ch]) {
+        const closer = PAIRS[ch]!;
+        if (typed.length < target.length + 20) {
+          typed += closer;
+          appended += closer;
+          totalKeystrokes++;
+          correctKeystrokes++;
+          keyEvents.push({ key: normalizeKey(closer), correct: true, latencyMs: 0 });
+          assists++;
+        }
+      }
+    }
+    if (appended) {
+      logInput("insert", appended);
+      snapshot();
+      lastKeyAt = Date.now();
+      lastKeyTime = batchAt;
+      draw();
+      checkEnd();
+    }
+  }
   function countCorrect(): number {
     let n = 0;
     const m = Math.min(typed.length, target.length);
@@ -448,6 +526,18 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     // Block caret blinks when idle (~530ms), stays solid while typing.
     const blinkOn = Date.now() - lastKeyAt < 600 || Math.floor(Date.now() / 530) % 2 === 0;
     const word = currentWordRange(target, Math.min(typed.length, target.length));
+    // Bracket match (editor QOL): underline the pair when the cursor sits
+    // on a bracket, or just after typing a closer.
+    const cursorPos = Math.min(typed.length, target.length);
+    let matchSet: Set<number> | null = null;
+    const atCursor = target[cursorPos];
+    if (atCursor !== undefined && "(){}[]".includes(atCursor)) {
+      const mate = findMate(target, cursorPos);
+      matchSet = new Set(mate != null ? [cursorPos, mate] : [cursorPos]);
+    } else if (cursorPos > 0 && target[cursorPos - 1] !== undefined && ")}]".includes(target[cursorPos - 1]!)) {
+      const mate = findMate(target, cursorPos - 1);
+      if (mate != null) matchSet = new Set([cursorPos - 1, mate]);
+    }
     const e = elapsed();
     const s = liveScore();
     // Live burst + consistency (Task #3). Burst resets on word change
@@ -545,11 +635,19 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         const idxs = textLines[li]!;
         let line = "";
         for (const idx of idxs) {
-          line += renderChar(target, typed, idx, idx === typed.length, {
-            caret: blinkOn,
-            dim: li < cursorLine,
-            active: word != null && idx >= word.start && idx < word.end,
-          });
+          line += renderChar(
+            target,
+            typed,
+            idx,
+            idx === typed.length,
+            {
+              caret: blinkOn,
+              dim: li < cursorLine,
+              active: word != null && idx >= word.start && idx < word.end,
+            },
+            kindMap ? (kindMap[idx] ?? null) : null,
+            matchSet?.has(idx) ?? false,
+          );
         }
         // cursor past end of text
         if (typed.length >= target.length && li === textLines.length - 1) {
@@ -569,7 +667,9 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       lines.push("");
       lines.push(
         `${keycap("esc")} ${c(ansi.gray, "quit")}   ${c(ansi.gray, "·")}   ${keycap("ctrl+w")} ${c(ansi.gray, "word")}   ${c(ansi.gray, "·")}   ${keycap("⌫")} ${c(ansi.gray, "fix")}` +
-          (multiline ? `   ${c(ansi.gray, "·")}   ${keycap("⏎")} ${c(ansi.gray, "newline")}` : ""),
+          (multiline
+            ? `   ${c(ansi.gray, "·")}   ${keycap("⏎")} ${c(ansi.gray, "newline")}   ${c(ansi.gray, "·")}   ${keycap("tab")} ${c(ansi.gray, "indent")}`
+            : ""),
       );
     } else {
       // results — framed panel
@@ -619,7 +719,8 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         `${c(ansi.gray, "miss".padEnd(6))}${mistakeStr}`,
         "",
         `${c(ansi.gray, "chars".padEnd(6))}${c(ansi.green, String(f.correctChars))} correct  ${c(ansi.red, String(f.incorrectChars))} wrong  ${c(ansi.magenta, String(f.extraChars))} extra  ${c(ansi.gray, String(f.missedChars) + " missed")}`,
-        `${c(ansi.gray, "cpm".padEnd(6))}${c(ansi.bold + ansi.white, f.cpm.toFixed(0))}   ${c(ansi.gray, "raw " + f.cpmRaw.toFixed(0))}   ${c(ansi.gray, String(f.corrections) + (f.corrections === 1 ? " correction" : " corrections"))}`,
+        `${c(ansi.gray, "cpm".padEnd(6))}${c(ansi.bold + ansi.white, f.cpm.toFixed(0))}   ${c(ansi.gray, "raw " + f.cpmRaw.toFixed(0))}   ${c(ansi.gray, String(f.corrections) + (f.corrections === 1 ? " correction" : " corrections"))}` +
+          (assists > 0 ? c(ansi.gray, `   ${assists} assisted`) : ""),
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
       ];
       if (priorBest == null) {
@@ -684,6 +785,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       cpm: Math.round(f.cpm),
       corrections: f.corrections,
       mistakes: mistakes.slice(0, 20).map((m) => ({ word: m.word, typed: m.typed })),
+      ...(assists > 0 ? { assists } : {}),
     })
       .then(() => {
         resultSaved = true;
@@ -782,51 +884,33 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           draw();
           return;
         }
-        // Tab is ignored during a run. Enter types a newline in
-        // multi-line targets (code mode); elsewhere it's ignored so a
-        // stray Enter can't corrupt a single-line run.
-        if (data === "\t") return;
-        if (!multiline && (data === "\r" || data === "\n")) return;
+        // Tab fills expected indentation and Enter inserts newline (+ the
+        // next line's exact indent) in code; elsewhere both keep their old
+        // behavior (Tab ignored, Enter ignored) so stray keys can't corrupt
+        // a single-line run.
+        if (data === "\t" || data === "\r" || data === "\n") {
+          if (!multiline) return;
+          if (data === "\t") {
+            const fill = tabFillFor(target, typed.length);
+            if (fill === "") return;
+            insertItems(fill.split("").map((ch) => ({ ch, assisted: true })));
+            return;
+          }
+          insertItems([{ ch: "\n", assisted: false }], true);
+          return;
+        }
 
         // printable input (may contain multiple chars if pasted)
-        let added = false;
-        const batchAt = Date.now();
-        let firstInBatch = true;
-        let appended = "";
         const text = multiline ? data.replace(/\r\n/g, "\n").replace(/\r/g, "\n") : data;
+        const items: { ch: string; assisted: boolean }[] = [];
         for (const ch of text) {
+          if (ch === "\t") continue; // bare Tab is handled above
           const code = ch.codePointAt(0)!;
           if (ch !== "\n" && (code < 32 || code === 127)) continue; // control
-          if (typed.length >= target.length + 20) break;
-          if (startTime === null) startTime = Date.now();
-          const pos = typed.length;
-          typed += ch;
-          appended += ch;
-          totalKeystrokes++;
-          const expected = pos < target.length ? target[pos]! : ch;
-          const hit = pos < target.length && ch === target[pos];
-          if (hit) correctKeystrokes++;
-          // Latency: time since previous keystroke batch. Chars after the
-          // first in a pasted batch get 0 (excluded from avg in stats).
-          const latency = lastKeyTime == null || firstInBatch === false ? 0 : batchAt - lastKeyTime;
-          keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
-          firstInBatch = false;
-          added = true;
-          // Word completed: a separator typed where the target has one.
-          if ((ch === " " || ch === "\n") && pos < target.length && target[pos] === ch) {
-            let s = pos - 1;
-            while (s >= 0 && target[s] !== " " && target[s] !== "\n") s--;
-            checkWord(s + 1, pos);
-          }
+          items.push({ ch, assisted: false });
         }
-        if (added) {
-          logInput("insert", appended);
-          snapshot();
-          lastKeyAt = Date.now();
-          lastKeyTime = batchAt;
-          draw();
-          checkEnd();
-        }
+        if (items.length === 0) return;
+        insertItems(items);
         return;
       } else {
         // finished — result shortcuts

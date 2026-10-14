@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import { createRequire } from "node:module";
 import { isWordDeleteKey, runTest, type RunConfig } from "./engine.js";
 import { generateWords, generateQuote, generateDaily, dailyDateStr, normalizeCustom } from "./generator.js";
-import { CODE_LANGS, generateCode, normalizeCodeLang } from "./code.js";
+import { CODE_LANGS, generateCode, normalizeCodeLang, type CodeLang } from "./code.js";
 import {
   exportCsv,
   exportJson,
@@ -68,7 +68,7 @@ ${H("Progress:")}
   ${flag("--version")}          ${D("show version")}
 
 ${H("Keys while typing:")}
-  ${keycap("type")} ${D("begin")}  ${D("·")}  ${keycap("esc")} ${D("quit")}  ${D("·")}  ${keycap("⌫")} ${D("fix")}  ${D("·")}  ${keycap("ctrl+w")} ${D("delete word")}  ${D("·")}  ${keycap("⏎")} ${D("newline (code)")}
+  ${keycap("type")} ${D("begin")}  ${D("·")}  ${keycap("esc")} ${D("quit")}  ${D("·")}  ${keycap("⌫")} ${D("fix")}  ${D("·")}  ${keycap("ctrl+w")} ${D("delete word")}  ${D("·")}  ${keycap("⏎")} ${D("newline (code)")}  ${D("·")}  ${keycap("tab")} ${D("indent (code)")}
 
 ${H("Keys on results:")}
   ${keycap("r")} ${D("retry")}  ${D("·")}  ${keycap("tab/n")} ${D("next")}  ${D("·")}  ${keycap("q/esc")} ${D("quit")}
@@ -263,30 +263,30 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   return { mode, history, help, version, debugKeys, replay, historyModes, historyLast, exportFmt, importFile };
 }
 
-async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null }> {
+async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null; codeLang: CodeLang | null }> {
   if (mode.kind === "time") {
     const count = Math.max(80, Math.ceil(mode.timeSec * 4));
     const text = generateWords(count, { punctuation: mode.punctuation, numbers: mode.numbers });
     const mods = [mode.punctuation ? ",punct" : "", mode.numbers ? ",num" : ""].join("");
-    return { text, label: `time ${mode.timeSec}s${mods}`, saveMode: `time ${mode.timeSec}s`, timeLimit: mode.timeSec };
+    return { text, label: `time ${mode.timeSec}s${mods}`, saveMode: `time ${mode.timeSec}s`, timeLimit: mode.timeSec, codeLang: null };
   }
   if (mode.kind === "words") {
     const text = generateWords(mode.wordCount, { punctuation: mode.punctuation, numbers: mode.numbers });
-    return { text, label: `words ${mode.wordCount}`, saveMode: `words ${mode.wordCount}`, timeLimit: null };
+    return { text, label: `words ${mode.wordCount}`, saveMode: `words ${mode.wordCount}`, timeLimit: null, codeLang: null };
   }
   if (mode.kind === "quote") {
     const text = generateQuote();
-    return { text, label: "quote", saveMode: "quote", timeLimit: null };
+    return { text, label: "quote", saveMode: "quote", timeLimit: null, codeLang: null };
   }
   if (mode.kind === "daily") {
     const day = dailyDateStr();
     const text = generateDaily(day);
-    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null };
+    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null, codeLang: null };
   }
   if (mode.kind === "code") {
-    const lang = mode.codeLang ?? "python";
+    const lang = normalizeCodeLang(mode.codeLang ?? "python") ?? "python";
     const text = generateCode(lang);
-    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null };
+    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null, codeLang: lang };
   }
   // custom
   let raw = mode.customText ?? "";
@@ -303,7 +303,7 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
     console.error("Custom text is empty after trimming whitespace.");
     process.exit(1);
   }
-  return { text, label: "custom", saveMode: "custom", timeLimit: null };
+  return { text, label: "custom", saveMode: "custom", timeLimit: null, codeLang: null };
 }
 
 async function menuLoop(): Promise<void> {
@@ -342,6 +342,7 @@ async function menuLoop(): Promise<void> {
         modeLabel: t.label,
         timeLimitSec: t.timeLimit,
         saveMode: t.saveMode,
+        codeLang: t.codeLang,
       };
       const action = await runTest(cfg);
       if (action === "quit") break;
@@ -451,6 +452,7 @@ async function main(): Promise<void> {
       modeLabel: t.label,
       timeLimitSec: t.timeLimit,
       saveMode: t.saveMode,
+      codeLang: t.codeLang,
     };
     const action = await runTest(cfg);
     if (action === "quit") {

@@ -152,10 +152,11 @@ typo --replay           # watch your last run back
 
 ### Keys
 
-- **While typing:** just start typing to begin the timer · `[esc]` quit · `[⌫]` fix · `[ctrl+w]` / `ctrl+backspace` delete word · `ctrl+u` clear all
+- **While typing:** just start typing to begin the timer · `[esc]` quit · `[⌫]` fix · `[ctrl+w]` / `ctrl+backspace` delete word · `ctrl+u` clear all · `[⏎]` newline in code mode · `[tab]` fill indent in code mode
 - **On results:** `[r]` retry · `[tab/n]` next test · `[q/esc]` quit
 - **In setup menu:** `[↑↓/jk]` move · `[←→/hl]` change · `[⏎]` select · `[q]` quit
 - **In replay:** `[space]` pause · `[+/−]` speed · `[r]` restart · `[q]` quit
+- **In code mode:** syntax highlighting, bracket-pair underlines, `[tab]` fills the exact expected indent, `[⏎]` auto-indents the new line, empty pairs like `()` auto-close. Assisted chars match the target and are counted on the results screen (`N assisted`) so practice stays honest.
 
 Live HUD shows countdown (or elapsed), live WPM, accuracy, current-word burst and consistency plus a fractional progress bar. Results show WPM, raw + gross WPM, accuracy, consistency, WPM trend, worst keys, word mistakes, CPM, corrections and char breakdown, earn XP toward levels, and are saved to `~/.typo/history.json`.
 
