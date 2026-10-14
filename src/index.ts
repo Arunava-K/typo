@@ -28,6 +28,9 @@ interface Mode {
   customText: string | null;
   customFile: string | null;
   codeLang: string | null;
+  suddenDeath: boolean;
+  noBackspace: boolean;
+  minAcc: number | null;
   punctuation: boolean;
   numbers: boolean;
 }
@@ -56,6 +59,9 @@ ${H("Modes:")} ${D("(default: --time 30)")}
 ${H("Modifiers:")}
   ${flag("-p, --punctuation")}  ${D("include punctuation + capitals (words/time modes)")}
   ${flag("--numbers")}          ${D("include numbers (words/time modes)")}
+  ${flag("--sudden-death")}     ${D("first mistake ends the run as failed  ✗")}
+  ${flag("--no-backspace")}     ${D("corrections disabled, expert style")}
+  ${flag("--min-acc <n>")}      ${D("fail the run below n% accuracy (10-char grace)")}
 
 ${H("Progress:")}
   ${flag("--history")}          ${D("show past results, PBs, averages & activity")}
@@ -96,6 +102,9 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     customText: null,
     customFile: null,
     codeLang: null,
+    suddenDeath: false,
+    noBackspace: false,
+    minAcc: null,
     punctuation: false,
     numbers: false,
   };
@@ -157,6 +166,17 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
     } else if (a === "--zen" || a === "-z") {
       mode.kind = "zen";
       modeSet = true;
+    } else if (a === "--sudden-death") {
+      mode.suddenDeath = true;
+    } else if (a === "--no-backspace") {
+      mode.noBackspace = true;
+    } else if (a === "--min-acc") {
+      const v = Number(argv[++i]);
+      if (!Number.isFinite(v) || v <= 0 || v > 100) {
+        console.error(`Invalid --min-acc value: ${argv[i]} (use 1–100)`);
+        process.exit(1);
+      }
+      mode.minAcc = v;
     } else if (a === "--code") {
       const lang = argv[++i];
       const id = lang ? normalizeCodeLang(lang) : null;
@@ -268,33 +288,44 @@ function parseArgs(argv: string[]): { mode: Mode; history: boolean; help: boolea
   return { mode, history, help, version, debugKeys, replay, historyModes, historyLast, exportFmt, importFile };
 }
 
+/** Fail-modifier suffixes: distinct saveModes keep PBs comparable. */
+function modSuffix(mode: Mode): { label: string; save: string } {
+  const parts: string[] = [];
+  if (mode.suddenDeath) parts.push("sudden");
+  if (mode.noBackspace) parts.push("noback");
+  if (mode.minAcc != null) parts.push(`minacc${mode.minAcc}`);
+  if (parts.length === 0) return { label: "", save: "" };
+  return { label: ` · ${parts.join(" ")}`, save: ` ${parts.join(" ")}` };
+}
+
 async function buildTarget(mode: Mode): Promise<{ text: string; label: string; saveMode: string; timeLimit: number | null; codeLang: CodeLang | null; zen: boolean }> {
+  const ms = modSuffix(mode);
   if (mode.kind === "time") {
     const count = Math.max(80, Math.ceil(mode.timeSec * 4));
     const text = generateWords(count, { punctuation: mode.punctuation, numbers: mode.numbers });
     const mods = [mode.punctuation ? ",punct" : "", mode.numbers ? ",num" : ""].join("");
-    return { text, label: `time ${mode.timeSec}s${mods}`, saveMode: `time ${mode.timeSec}s`, timeLimit: mode.timeSec, codeLang: null, zen: false };
+    return { text, label: `time ${mode.timeSec}s${mods}${ms.label}`, saveMode: `time ${mode.timeSec}s${ms.save}`, timeLimit: mode.timeSec, codeLang: null, zen: false };
   }
   if (mode.kind === "words") {
     const text = generateWords(mode.wordCount, { punctuation: mode.punctuation, numbers: mode.numbers });
-    return { text, label: `words ${mode.wordCount}`, saveMode: `words ${mode.wordCount}`, timeLimit: null, codeLang: null, zen: false };
+    return { text, label: `words ${mode.wordCount}${ms.label}`, saveMode: `words ${mode.wordCount}${ms.save}`, timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "quote") {
     const text = generateQuote();
-    return { text, label: "quote", saveMode: "quote", timeLimit: null, codeLang: null, zen: false };
+    return { text, label: `quote${ms.label}`, saveMode: `quote${ms.save}`, timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "daily") {
     const day = dailyDateStr();
     const text = generateDaily(day);
-    return { text, label: `daily ${day}`, saveMode: "daily", timeLimit: null, codeLang: null, zen: false };
+    return { text, label: `daily ${day}${ms.label}`, saveMode: `daily${ms.save}`, timeLimit: null, codeLang: null, zen: false };
   }
   if (mode.kind === "code") {
     const lang = normalizeCodeLang(mode.codeLang ?? "python") ?? "python";
     const text = generateCode(lang);
-    return { text, label: `code ${lang}`, saveMode: `code ${lang}`, timeLimit: null, codeLang: lang, zen: false };
+    return { text, label: `code ${lang}${ms.label}`, saveMode: `code ${lang}${ms.save}`, timeLimit: null, codeLang: lang, zen: false };
   }
   if (mode.kind === "zen") {
-    return { text: "", label: "zen", saveMode: "zen", timeLimit: null, codeLang: null, zen: true };
+    return { text: "", label: `zen${ms.label}`, saveMode: `zen${ms.save}`, timeLimit: null, codeLang: null, zen: true };
   }
   // custom
   let raw = mode.customText ?? "";
@@ -311,7 +342,7 @@ async function buildTarget(mode: Mode): Promise<{ text: string; label: string; s
     console.error("Custom text is empty after trimming whitespace.");
     process.exit(1);
   }
-  return { text, label: "custom", saveMode: "custom", timeLimit: null, codeLang: null, zen: false };
+  return { text, label: `custom${ms.label}`, saveMode: `custom${ms.save}`, timeLimit: null, codeLang: null, zen: false };
 }
 
 async function menuLoop(): Promise<void> {
@@ -324,6 +355,9 @@ async function menuLoop(): Promise<void> {
     numbers: false,
     customFile: "",
     codeLang: "python",
+    suddenDeath: false,
+    noBackspace: false,
+    minAcc: null,
   };
   for (;;) {
     const m = await runMenu(remembered);
@@ -339,6 +373,9 @@ async function menuLoop(): Promise<void> {
       customText: null,
       customFile: m.config.customFile || null,
       codeLang: m.config.codeLang || "python",
+      suddenDeath: m.config.suddenDeath,
+      noBackspace: m.config.noBackspace,
+      minAcc: m.config.minAcc,
       punctuation: m.config.punctuation,
       numbers: m.config.numbers,
     };
@@ -352,6 +389,9 @@ async function menuLoop(): Promise<void> {
         saveMode: t.saveMode,
         codeLang: t.codeLang,
         zen: t.zen,
+        suddenDeath: mode.suddenDeath,
+        noBackspace: mode.noBackspace,
+        minAcc: mode.minAcc,
       };
       const action = await runTest(cfg);
       if (action === "quit") break;
@@ -463,6 +503,9 @@ async function main(): Promise<void> {
       saveMode: t.saveMode,
       codeLang: t.codeLang,
       zen: t.zen,
+      suddenDeath: mode.suddenDeath,
+      noBackspace: mode.noBackspace,
+      minAcc: mode.minAcc,
     };
     const action = await runTest(cfg);
     if (action === "quit") {

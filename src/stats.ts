@@ -184,7 +184,6 @@ export function scoreRun(
 
 /** Minimum zen run length that gets saved to history (Monkeytype parity). */
 export const MIN_ZEN_SAVE_SEC = 15;
-
 export function scoreZen(
   typed: string,
   elapsedSec: number,
@@ -205,6 +204,17 @@ export function scoreZen(
     cpmRaw: elapsedSec <= 0 ? 0 : typed.length / (elapsedSec / 60),
     corrections,
   };
+}
+
+// --- Fail modifiers (Task #15) ---
+
+/**
+ * True when buffer accuracy drops below minAcc after a grace period.
+ * Pure so the grace rule is unit-testable.
+ */
+export function belowMinAcc(correctChars: number, typedLen: number, minAcc: number, grace = 10): boolean {
+  if (typedLen < grace) return false;
+  return (correctChars / typedLen) * 100 < minAcc;
 }
 
 // --- Per-key stats (Task #2) ---

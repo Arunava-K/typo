@@ -25,6 +25,9 @@ export interface MenuConfig {
   numbers: boolean;
   customFile: string;
   codeLang: string;
+  suddenDeath: boolean;
+  noBackspace: boolean;
+  minAcc: number | null;
 }
 
 export type MenuResult = { kind: "start"; config: MenuConfig } | { kind: "quit" };
@@ -244,6 +247,9 @@ export type RowId =
   | "lang"
   | "punct"
   | "numbers"
+  | "death"
+  | "noback"
+  | "minacc"
   | "start"
   | "history"
   | "quit";
@@ -265,7 +271,7 @@ export function buildRows(mode: ModeName): RowId[] {
   if (mode === "words") rows.push("words");
   if (mode === "custom") rows.push("file");
   if (mode === "code") rows.push("lang");
-  rows.push("punct", "numbers", "start", "history", "quit");
+  rows.push("punct", "numbers", "death", "noback", "minacc", "start", "history", "quit");
   return rows;
 }
 
@@ -330,6 +336,7 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
     timeSec: snap(TIME_OPTS, defaults.timeSec),
     wordCount: snap(WORD_OPTS, defaults.wordCount),
     codeLang: (CODE_LANGS as readonly string[]).includes(defaults.codeLang) ? defaults.codeLang : "python",
+    minAcc: [null, 80, 85, 90, 95].includes(defaults.minAcc) ? defaults.minAcc : null,
   };
   let rows = buildRows(cfg.mode);
   let sel = 0;
@@ -363,6 +370,12 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return onOffPill(cfg.punctuation);
       case "numbers":
         return onOffPill(cfg.numbers);
+      case "death":
+        return onOffPill(cfg.suddenDeath);
+      case "noback":
+        return onOffPill(cfg.noBackspace);
+      case "minacc":
+        return cycler(cfg.minAcc == null ? "off" : `${cfg.minAcc}%`);
       case "start":
         return c(ansi.bold + ansi.green, "▶  start test");
       case "history":
@@ -403,6 +416,12 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
         return `${ic("Aa")}punctuation`;
       case "numbers":
         return `${ic("#")}numbers`;
+      case "death":
+        return `${ic("✗")}sudden death`;
+      case "noback":
+        return `${ic("⌫")}no backspace`;
+      case "minacc":
+        return `${ic("%")}min accuracy`;
       case "start":
         return "";
       case "history":
@@ -565,6 +584,15 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
       case "numbers":
         cfg.numbers = !cfg.numbers;
         break;
+      case "death":
+        cfg.suddenDeath = !cfg.suddenDeath;
+        break;
+      case "noback":
+        cfg.noBackspace = !cfg.noBackspace;
+        break;
+      case "minacc":
+        cfg.minAcc = cycle([null, 80, 85, 90, 95] as (number | null)[], cfg.minAcc, dir);
+        break;
       default:
         break;
     }
@@ -652,6 +680,9 @@ export async function runMenu(defaults: MenuConfig): Promise<MenuResult> {
           break;
         case "punct":
         case "numbers":
+        case "death":
+        case "noback":
+        case "minacc":
           adjust(id, 1);
           draw();
           break;

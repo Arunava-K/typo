@@ -2,6 +2,7 @@ import { ansi, c, keycap, logo, padCenter, progressBar, stripAnsi, termHeight, t
 import {
   MIN_ZEN_SAVE_SEC,
   accumulateKeyStats,
+  belowMinAcc,
   buildWpmTrace,
   calcBurst,
   calcConsistency,
@@ -35,6 +36,9 @@ export interface RunConfig {
   saveMode: string;
   codeLang?: CodeLang | null; // set for code mode → syntax colors + editor assists
   zen?: boolean; // freestyle: no target, Esc finishes, 15s minimum to save
+  suddenDeath?: boolean; // first mistake ends the run as failed
+  noBackspace?: boolean; // corrections disabled, Monkeytype-expert style
+  minAcc?: number | null; // fail the run when buffer accuracy drops below this
 }
 
 export type AfterAction = "quit" | "restart" | "next";
@@ -373,7 +377,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let priorXp = 0;
   try {
     const priorHist = await loadHistory();
-    const prior = priorHist.filter((h) => h.mode === cfg.saveMode);
+    const prior = priorHist.filter((h) => h.mode === cfg.saveMode && h.failed !== true);
     if (prior.length > 0) priorBest = Math.max(...prior.map((h) => h.wpm));
     priorXp = totalXp(priorHist);
   } catch {
@@ -402,6 +406,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
   let resultSaved = false;
   let lastKeyAt = 0;
   let xpNote = ""; // " · +30 XP" (+ level-up), baked at finish (Task #9)
+  let failReason: string | null = null; // set when a fail modifier ends the run
 
   // Per-keystroke timeline for WPM trace + consistency (Task #1).
   const samples: { t: number; correct: number; typed: number }[] = [];
@@ -454,6 +459,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
     // Assists only fire on single physical presses — never inside a paste,
     // where an auto-inserted closer would duplicate pasted characters.
     const allowClose = items.length === 1 || autoIndent;
+    let fatal = false;
     for (const item of items) {
       const ch = item.ch;
       if (typed.length >= target.length + 20) break;
@@ -472,6 +478,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       keyEvents.push({ key: normalizeKey(expected), correct: hit, latencyMs: latency });
       if (item.assisted) assists++;
       firstInBatch = false;
+      // Sudden death: first live mistake ends the run as failed.
+      if (cfg.suddenDeath === true && !hit && !item.assisted) {
+        failReason = `first mistake after ${elapsed().toFixed(0)}s`;
+        fatal = true;
+        break;
+      }
       // Word completed: a separator typed where the target has one.
       if ((ch === " " || ch === "\n") && pos < target.length && target[pos] === ch) {
         let s = pos - 1;
@@ -497,8 +509,17 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       snapshot();
       lastKeyAt = Date.now();
       lastKeyTime = batchAt;
+      if (fatal) {
+        finish();
+        return;
+      }
       draw();
       checkEnd();
+    }
+    if (!finished && cfg.minAcc != null && belowMinAcc(countCorrect(), typed.length, cfg.minAcc)) {
+      failReason = `accuracy ${((countCorrect() / Math.max(1, typed.length)) * 100).toFixed(1)}% below ${cfg.minAcc}%`;
+      finish();
+      return;
     }
   }
   function countCorrect(): number {
@@ -771,10 +792,12 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
           (assists > 0 ? c(ansi.gray, `   ${assists} assisted`) : ""),
         `${c(ansi.gray, "time".padEnd(6))}${finishElapsed.toFixed(1)}s   ${c(ansi.gray, "mode " + cfg.modeLabel)}`,
       ];
-      if (priorBest == null) {
-        body.push(c(ansi.gray, `★ first recorded ${cfg.saveMode} run`));
-      } else if (f.wpm > priorBest) {
-        body.push(c(ansi.bold + ansi.yellow, `✦ ★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)}) ★ ✦`));
+      if (failReason == null) {
+        if (priorBest == null) {
+          body.push(c(ansi.gray, `★ first recorded ${cfg.saveMode} run`));
+        } else if (f.wpm > priorBest) {
+          body.push(c(ansi.bold + ansi.yellow, `✦ ★ new personal best! (${priorBest.toFixed(1)} → ${f.wpm.toFixed(1)}) ★ ✦`));
+        }
       }
       if (resultSaved) body.push(c(ansi.gray, `saved to ~/.typo/history.json${xpNote}`));
       if (cfg.zen === true && finishElapsed < MIN_ZEN_SAVE_SEC) {
@@ -785,7 +808,13 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         `${keycap("r")} ${c(ansi.gray, "retry")}   ${keycap("tab/n")} ${c(ansi.gray, "next")}   ${keycap("q/esc")} ${c(ansi.gray, "quit")}`,
       );
       const innerW = Math.max(...body.map((l) => stripAnsi(l).length));
-      body.unshift(padCenter(c(ansi.bold + ansi.green, "✦ done ✦"), innerW));
+      body.unshift(
+        padCenter(
+          failReason != null ? c(ansi.bold + ansi.red, "✗ failed") : c(ansi.bold + ansi.green, "✦ done ✦"),
+          innerW,
+        ),
+      );
+      if (failReason != null) body.splice(1, 0, padCenter(c(ansi.red, failReason), innerW));
       for (const bl of buildBox(body)) lines.push(bl);
     }
 
@@ -847,6 +876,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
       corrections: f.corrections,
       mistakes: mistakes.slice(0, 20).map((m) => ({ word: m.word, typed: m.typed })),
       ...(assists > 0 ? { assists } : {}),
+      ...(failReason != null ? { failed: true } : {}),
     })
       .then(() => {
         resultSaved = true;
@@ -913,6 +943,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         // terminals send for Ctrl+Backspace and Alt+Backspace.
         // Must come before the generic ESC-sequence ignore below.
         if (isWordDeleteKey(data)) {
+          if (cfg.noBackspace === true) return;
           if (typed.length > 0) {
             typed = deleteLastWord(typed);
             corrections++;
@@ -928,6 +959,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
 
         // Backspace (DEL or BS)
         if (data === "\x7f" || data === "\x08") {
+          if (cfg.noBackspace === true) return;
           if (typed.length > 0) {
             typed = typed.slice(0, -1);
             corrections++;
@@ -941,6 +973,7 @@ export async function runTest(cfg: RunConfig): Promise<AfterAction> {
         }
         // Ctrl-U: clear all
         if (data === "\x15") {
+          if (cfg.noBackspace === true) return;
           if (typed.length > 0) {
             corrections++;
             logInput("clear");

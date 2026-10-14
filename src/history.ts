@@ -21,6 +21,7 @@ export interface HistoryEntry {
   corrections?: number; // backspace/word-delete/clear presses (Task #4)
   mistakes?: { word: string; typed: string }[]; // completed words typed wrong, ≤20 (Task #5)
   assists?: number; // editor-assisted chars: tab fill, auto-indent, auto-close (code)
+  failed?: boolean; // fail-modifier run (sudden death / min-acc), excluded from PBs
 }
 
 // --- Session replay (Task #5) ---
@@ -120,6 +121,7 @@ const CSV_COLS = [
   "cpm",
   "corrections",
   "assists",
+  "failed",
 ] as const;
 
 function csvCell(v: string | number): string {
@@ -146,6 +148,7 @@ export function exportCsv(hist: HistoryEntry[]): string {
         h.cpm ?? "",
         h.corrections ?? "",
         h.assists ?? "",
+        h.failed === true ? 1 : "",
       ].join(","),
     );
   }
@@ -238,6 +241,7 @@ export function toEntry(o: unknown): HistoryEntry | null {
     );
     if (mk.length > 0) entry.mistakes = mk.slice(0, 20);
   }
+  if (r["failed"] === true || r["failed"] === 1 || r["failed"] === "1") entry.failed = true;
   return entry;
 }
 
@@ -339,25 +343,28 @@ function cmpMode(a: string, b: string): number {
 }
 
 /**
- * Best run per mode. Ties break toward higher accuracy, then recency.
+ * Best run per mode. Failed modifier runs count as attempts but never
+ * take a PB (ties break toward higher accuracy, then recency).
  * Pure function so grouping/sorting/tiebreaks are unit-testable.
  */
 export function pbMatrix(hist: HistoryEntry[]): ModeBest[] {
-  const map = new Map<string, { best: HistoryEntry; runs: number }>();
+  const map = new Map<string, { best: HistoryEntry | null; runs: number }>();
   for (const h of hist) {
-    const cur = map.get(h.mode);
+    let cur = map.get(h.mode);
     if (!cur) {
-      map.set(h.mode, { best: h, runs: 1 });
-    } else {
-      cur.runs++;
-      const b = cur.best;
-      if (h.wpm > b.wpm || (h.wpm === b.wpm && (h.acc > b.acc || (h.acc === b.acc && h.date > b.date)))) {
-        cur.best = h;
-      }
+      cur = { best: null, runs: 0 };
+      map.set(h.mode, cur);
+    }
+    cur.runs++;
+    if (h.failed === true) continue;
+    const b = cur.best;
+    if (b == null || h.wpm > b.wpm || (h.wpm === b.wpm && (h.acc > b.acc || (h.acc === b.acc && h.date > b.date)))) {
+      cur.best = h;
     }
   }
   return [...map.entries()]
-    .map(([mode, v]) => ({ mode, runs: v.runs, wpm: v.best.wpm, acc: v.best.acc, date: v.best.date }))
+    .filter(([, v]) => v.best != null)
+    .map(([mode, v]) => ({ mode, runs: v.runs, wpm: v.best!.wpm, acc: v.best!.acc, date: v.best!.date }))
     .sort((a, b) => cmpMode(a.mode, b.mode));
 }
 
